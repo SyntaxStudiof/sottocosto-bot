@@ -27,8 +27,8 @@ def fetch_products_from_sheet():
             
             product = {
                 "title": row.get('titolo', '').strip(),
-                "price": float(row.get('prezzo', 0)),
-                "old_price": float(row.get('prezzo_originale', 0)),
+                "price": float(row.get('prezzo', 0).replace(',', '.')),
+                "old_price": float(row.get('prezzo_originale', 0).replace(',', '.')),
                 "discount_percent": int(row.get('sconto_percento', 0)),
                 "image_url": row.get('immagine_url', '').strip(),
                 "affiliate_link": row.get('link_affiliato', '').strip(),
