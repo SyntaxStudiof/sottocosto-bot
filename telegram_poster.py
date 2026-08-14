@@ -5,9 +5,9 @@ from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
 def format_message(product: dict) -> str:
     risparmio = product["old_price"] - product["price"]
     return (
-        f"🔥 *OFFERTA IMPERDIBILE* 🔥\n\n"
-        f"*{product['title']}*\n\n"
-        f"~~{product['old_price']:.2f}€~~  ➜  *{product['price']:.2f}€*\n"
+        f"🔥 <b>OFFERTA IMPERDIBILE</b> 🔥\n\n"
+        f"<b>{product['title']}</b>\n\n"
+        f"<s>{product['old_price']:.2f}€</s>  ➜  <b>{product['price']:.2f}€</b>\n"
         f"💥 Sconto del {product['discount_percent']}% (risparmi {risparmio:.2f}€)\n\n"
         f"👉 [Acquista ora]({product['affiliate_link']})\n\n"
         f"_Link affiliato Amazon: potremmo ricevere una piccola commissione, "
@@ -24,8 +24,9 @@ async def post_product(product: dict):
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     testo = format_message(product)
 
-    await bot.send_message(
+    await bot.send_photo(
         chat_id=TELEGRAM_CHANNEL_ID,
-        text=testo,
-        parse_mode="Markdown",
+        photo=product["image_url"],
+        caption=testo,
+        parse_mode="HTML",
     )
