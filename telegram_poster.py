@@ -9,9 +9,9 @@ def format_message(product: dict) -> str:
         f"<b>{product['title']}</b>\n\n"
         f"<s>{product['old_price']:.2f}€</s>  ➜  <b>{product['price']:.2f}€</b>\n"
         f"💥 Sconto del {product['discount_percent']}% (risparmi {risparmio:.2f}€)\n\n"
-        f"👉 [Acquista ora]({product['affiliate_link']})\n\n"
-        f"_Link affiliato Amazon: potremmo ricevere una piccola commissione, "
-        f"senza costi aggiuntivi per te._"
+        f'👉 <a href="{product["affiliate_link"]}">Acquista ora</a>\n\n'
+        f'<i>Link affiliato Amazon: potremmo ricevere una piccola commissione, '
+        f'senza costi aggiuntivi per te.</i>'
     )
 
 
