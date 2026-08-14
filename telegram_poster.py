@@ -21,7 +21,7 @@ async def post_product(product: dict):
             "TELEGRAM_BOT_TOKEN o TELEGRAM_CHANNEL_ID non configurati."
         )
 
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
     testo = format_message(product)
 
     await bot.send_message(
