@@ -1,0 +1,6 @@
+import os
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
+
+MIN_DISCOUNT_PERCENT = 20
