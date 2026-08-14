@@ -3,31 +3,13 @@ from config import MIN_DISCOUNT_PERCENT
 
 _MOCK_PRODUCTS = [
     {
-        "title": "Cuffie Bluetooth Over-Ear Cancellazione Rumore",
-        "price": 39.99,
-        "old_price": 69.99,
-        "discount_percent": 43,
-        "image_url": "https://placehold.co/400",
-        "affiliate_link": "https://www.amazon.it/dp/ESEMPIO1?tag=TUOTAG-21",
-        "is_bestseller": True,
-    },
-    {
-        "title": "Friggitrice ad Aria 5.5L Digitale",
-        "price": 59.90,
-        "old_price": 89.90,
-        "discount_percent": 33,
-        "image_url": "https://placehold.co/400",
-        "affiliate_link": "https://www.amazon.it/dp/ESEMPIO2?tag=TUOTAG-21",
-        "is_bestseller": True,
-    },
-    {
-        "title": "Power Bank 20000mAh Ricarica Rapida",
-        "price": 19.99,
+        "title": "ZOMFELT Zaino Ryanair 40x30x20, 24L Bagaglio a Mano Zaino da Viaggio Donna",
+        "price": 23.14,
         "old_price": 29.99,
-        "discount_percent": 33,
+        "discount_percent": 23,
         "image_url": "https://placehold.co/400",
-        "affiliate_link": "https://www.amazon.it/dp/ESEMPIO3?tag=TUOTAG-21",
-        "is_bestseller": False,
+        "affiliate_link": "https://amzn.to/4x4MgY8",
+        "is_bestseller": True,
     },
 ]
 
