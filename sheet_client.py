@@ -42,3 +42,43 @@ def mark_row(ws, row_number, stato, extra_updates=None):
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _get_config_worksheet(client=None):
+    if client is None:
+        creds_dict = json.loads(CREDS_JSON)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        client = gspread.authorize(creds)
+    sheet = client.open_by_key(SHEET_ID)
+    try:
+        return sheet.worksheet("Config")
+    except gspread.WorksheetNotFound:
+        ws = sheet.add_worksheet(title="Config", rows=10, cols=2)
+        ws.update([["chiave", "valore"]], "A1")
+        return ws
+
+
+def get_state(key, default=""):
+    ws = _get_config_worksheet()
+    values = ws.get_all_records()
+    for row in values:
+        if row.get("chiave") == key:
+            return str(row.get("valore", default))
+    return default
+
+
+def set_state(key, value):
+    ws = _get_config_worksheet()
+    cell = ws.find(key)
+    if cell:
+        ws.update_cell(cell.row, 2, value)
+    else:
+        ws.append_row([key, value])
+
+
+def append_product_row(product_dict):
+    """Aggiunge una nuova riga prodotto in coda, rispettando l'ordine delle colonne del foglio principale."""
+    ws = _get_worksheet()
+    header = ws.row_values(1)
+    row = [product_dict.get(col, "") for col in header]
+    ws.append_row(row)
