@@ -20,7 +20,7 @@ def _get_worksheet():
 def get_all_rows():
     """Ritorna lista di dict, ognuno con anche il numero di riga reale nel foglio."""
     ws = _get_worksheet()
-    records = ws.get_all_records()
+    records = ws.get_all_records(numericise_ignore=['all'])
     rows = []
     for i, r in enumerate(records, start=2):  # riga 1 = header
         r["_row_number"] = i
