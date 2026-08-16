@@ -16,6 +16,17 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
+AFFILIATE_TAG = "sottocostoclub21"  # verifica sia il tuo tag esatto su Amazon Associates
+
+
+def add_affiliate_tag(url):
+    if "tag=" in url:
+        url = re.sub(r"tag=[^&]+", f"tag={AFFILIATE_TAG}", url)
+    else:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}tag={AFFILIATE_TAG}"
+    return url
+
 
 def get_updates(offset):
     resp = requests.get(f"{API_URL}/getUpdates", params={"offset": offset, "timeout": 0})
@@ -32,7 +43,7 @@ def resolve_and_extract_asin(link):
     final_url = resp.url
     match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", final_url)
     asin = match.group(1) if match else ""
-    return asin, resp.text
+    return asin, resp.text, final_url
 
 
 def extract_title(html):
@@ -73,11 +84,12 @@ def handle_aggiungi(chat_id, args):
         send_message(chat_id, "Mandami un link Amazon valido dopo /aggiungi")
         return
 
-    asin, html = resolve_and_extract_asin(link)
+    asin, html, final_url = resolve_and_extract_asin(link)
     titolo = extract_title(html)
     immagine = extract_image(html)
+    link_con_tag = add_affiliate_tag(final_url)
 
-    set_state(f"pending_link_{chat_id}", link)
+    set_state(f"pending_link_{chat_id}", link_con_tag)
     set_state(f"pending_titolo_{chat_id}", titolo)
     set_state(f"pending_immagine_{chat_id}", immagine)
     set_state(f"pending_asin_{chat_id}", asin)
@@ -85,7 +97,7 @@ def handle_aggiungi(chat_id, args):
     if titolo and not immagine:
         send_message(chat_id, f"📦 {titolo}\n\n⚠️ Non trovo l'immagine.\nMandami: prezzo_scontato prezzo_pieno link_immagine")
     elif titolo:
-        send_message(chat_id, f"📦 {titolo}\n\nOra mandami i prezzi così:\nprezzo_scontato prezzo_pieno\n(es: 23.14 29.99)")
+        send_message(chat_id, f"📦 {titolo}\n🖼 {immagine[:60]}...\n\nOra mandami i prezzi così:\nprezzo_scontato prezzo_pieno\n(es: 23.14 29.99)")
     else:
         send_message(chat_id, "⚠️ Non sono riuscito a leggere il titolo. Mandami comunque i prezzi, poi il titolo lo scrivi tu.")
 
