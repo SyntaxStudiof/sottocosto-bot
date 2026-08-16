@@ -47,29 +47,35 @@ def extract_meta(html, prop):
 
 
 def handle_aggiungi(chat_id, args):
-    parts = args.split(maxsplit=3)
+    if ";" in args:
+        parts = [p.strip() for p in args.split(";")]
+    else:
+        parts = args.split(maxsplit=2)
+
     if len(parts) < 3:
-        send_message(chat_id, "Formato: /aggiungi <link> <prezzo_scontato> <prezzo_pieno> [titolo opzionale]")
+        send_message(chat_id,
+            "Formato: /aggiungi <link>;<prezzo_scontato>;<prezzo_pieno>;<titolo opz.>;<immagine opz.>")
         return
 
-    link, prezzo_scontato, prezzo_pieno = parts[0], parts[1], parts[2]
-    titolo_manuale = parts[3] if len(parts) == 4 else None
-
+    link = parts[0]
     try:
-        prezzo_scontato = float(prezzo_scontato.replace(",", "."))
-        prezzo_pieno = float(prezzo_pieno.replace(",", "."))
+        prezzo_scontato = float(parts[1].replace(",", "."))
+        prezzo_pieno = float(parts[2].replace(",", "."))
     except ValueError:
         send_message(chat_id, "I prezzi devono essere numeri, es: 23.14")
         return
 
+    titolo_manuale = parts[3] if len(parts) > 3 and parts[3] else None
+    immagine_manuale = parts[4] if len(parts) > 4 and parts[4] else None
+
     asin, html = resolve_and_extract_asin(link)
     titolo = titolo_manuale or extract_meta(html, "og:title")
-    immagine = extract_meta(html, "og:image")
+    immagine = immagine_manuale or extract_meta(html, "og:image")
 
     if not titolo:
-        send_message(chat_id, "Non sono riuscito a leggere il titolo (Amazon ha bloccato la richiesta). "
-                               "Riprova aggiungendo il titolo alla fine, es:\n"
-                               "/aggiungi <link> 23.14 29.99 Nome prodotto qui")
+        send_message(chat_id,
+            "Non sono riuscito a leggere il titolo (Amazon ha bloccato la richiesta).\n"
+            "Riprova così:\n/aggiungi <link>;23.14;29.99;Nome prodotto;URL immagine")
         return
 
     sconto_percento = round((1 - prezzo_scontato / prezzo_pieno) * 100)
@@ -81,7 +87,7 @@ def handle_aggiungi(chat_id, args):
         "prezzo_originale": str(prezzo_pieno).replace(".", ","),
         "sconto_percento": sconto_percento,
         "link_affiliato": link,
-        "immagine_url": immagine,
+        "immagine_url": immagine or "",
         "ASIN": asin,
         "fonte": "manuale",
         "stato": "NUOVO",
@@ -90,7 +96,8 @@ def handle_aggiungi(chat_id, args):
         "pubblicato_il": "",
     })
 
-    send_message(chat_id, f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%")
+    nota_immagine = "" if immagine else "\n⚠️ Nessuna immagine — aggiungila a mano sul foglio prima che venga pubblicato."
+    send_message(chat_id, f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%{nota_immagine}")
 
 
 def main():
