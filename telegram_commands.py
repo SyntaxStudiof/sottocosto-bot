@@ -1,4 +1,6 @@
 import re
+import json
+import html as html_module
 import requests
 from datetime import datetime, timedelta, timezone
 
@@ -33,14 +35,35 @@ def resolve_and_extract_asin(link):
     return asin, resp.text
 
 
-def extract_meta(html, prop):
-    match = re.search(rf'<meta property="{prop}" content="([^"]+)"', html)
+def extract_title(html):
+    match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
     if match:
         return match.group(1)
-    if prop == "og:title":
-        match = re.search(r"<title>([^<]+)</title>", html)
-        if match:
-            return match.group(1).replace(" : Amazon.it", "").strip()
+    match = re.search(r"<title>([^<]+)</title>", html)
+    if match:
+        return match.group(1).replace(" : Amazon.it", "").strip()
+    return ""
+
+
+def extract_image(html):
+    match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
+    if match:
+        return match.group(1)
+
+    match = re.search(r'data-old-hires="([^"]+)"', html)
+    if match and match.group(1):
+        return match.group(1)
+
+    match = re.search(r'data-a-dynamic-image="([^"]+)"', html)
+    if match:
+        try:
+            raw = html_module.unescape(match.group(1))
+            data = json.loads(raw)
+            if data:
+                return list(data.keys())[0]
+        except (json.JSONDecodeError, IndexError):
+            pass
+
     return ""
 
 
@@ -51,16 +74,17 @@ def handle_aggiungi(chat_id, args):
         return
 
     asin, html = resolve_and_extract_asin(link)
-    titolo = extract_meta(html, "og:title")
-    immagine = extract_meta(html, "og:image")
+    titolo = extract_title(html)
+    immagine = extract_image(html)
 
-    # salva lo stato "in attesa di prezzi" per questa chat
     set_state(f"pending_link_{chat_id}", link)
     set_state(f"pending_titolo_{chat_id}", titolo)
     set_state(f"pending_immagine_{chat_id}", immagine)
     set_state(f"pending_asin_{chat_id}", asin)
 
-    if titolo:
+    if titolo and not immagine:
+        send_message(chat_id, f"📦 {titolo}\n\n⚠️ Non trovo l'immagine.\nMandami: prezzo_scontato prezzo_pieno link_immagine")
+    elif titolo:
         send_message(chat_id, f"📦 {titolo}\n\nOra mandami i prezzi così:\nprezzo_scontato prezzo_pieno\n(es: 23.14 29.99)")
     else:
         send_message(chat_id, "⚠️ Non sono riuscito a leggere il titolo. Mandami comunque i prezzi, poi il titolo lo scrivi tu.")
@@ -69,7 +93,7 @@ def handle_aggiungi(chat_id, args):
 def handle_prezzi(chat_id, text):
     pending_link = get_state(f"pending_link_{chat_id}", "")
     if not pending_link:
-        return False  # non c'è nessuna richiesta in sospeso, ignora
+        return False
 
     parts = text.split()
     if len(parts) < 2:
@@ -85,8 +109,12 @@ def handle_prezzi(chat_id, text):
     immagine = get_state(f"pending_immagine_{chat_id}", "")
     asin = get_state(f"pending_asin_{chat_id}", "")
 
+    if not immagine and len(parts) > 2 and parts[2].startswith("http"):
+        immagine = parts[2]
+
     if not titolo:
-        titolo = " ".join(parts[2:]) if len(parts) > 2 else "(titolo da completare)"
+        titolo_parts = [p for p in parts[2:] if not p.startswith("http")]
+        titolo = " ".join(titolo_parts) if titolo_parts else "(titolo da completare)"
 
     sconto_percento = round((1 - prezzo_scontato / prezzo_pieno) * 100)
     now = datetime.now(timezone.utc)
@@ -106,10 +134,9 @@ def handle_prezzi(chat_id, text):
         "pubblicato_il": "",
     })
 
-    # pulisce lo stato in sospeso
     set_state(f"pending_link_{chat_id}", "")
 
-    nota = "" if immagine else "\n⚠️ Manca l'immagine — aggiungila a mano sul foglio."
+    nota = "" if immagine else "\n⚠️ Manca ancora l'immagine — aggiungila a mano sul foglio."
     send_message(chat_id, f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%{nota}")
     return True
 
