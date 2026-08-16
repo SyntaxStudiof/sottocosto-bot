@@ -16,7 +16,7 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-AFFILIATE_TAG = "sottocostoclub21"  # verifica sia il tuo tag esatto su Amazon Associates
+AFFILIATE_TAG = "sottocostoclu-21"
 
 
 def add_affiliate_tag(url):
