@@ -7,6 +7,13 @@ from sheet_client import get_state, set_state, append_product_row
 
 API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "it-IT,it;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
 
 def get_updates(offset):
     resp = requests.get(f"{API_URL}/getUpdates", params={"offset": offset, "timeout": 0})
@@ -16,14 +23,6 @@ def get_updates(offset):
 
 def send_message(chat_id, text):
     requests.post(f"{API_URL}/sendMessage", data={"chat_id": chat_id, "text": text})
-
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept-Language": "it-IT,it;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
 
 
 def resolve_and_extract_asin(link):
@@ -38,7 +37,6 @@ def extract_meta(html, prop):
     match = re.search(rf'<meta property="{prop}" content="([^"]+)"', html)
     if match:
         return match.group(1)
-    # fallback per il titolo: prova il tag <title> della pagina
     if prop == "og:title":
         match = re.search(r"<title>([^<]+)</title>", html)
         if match:
@@ -47,36 +45,48 @@ def extract_meta(html, prop):
 
 
 def handle_aggiungi(chat_id, args):
-    if ";" in args:
-        parts = [p.strip() for p in args.split(";")]
-    else:
-        parts = args.split(maxsplit=2)
-
-    if len(parts) < 3:
-        send_message(chat_id,
-            "Formato: /aggiungi <link>;<prezzo_scontato>;<prezzo_pieno>;<titolo opz.>;<immagine opz.>")
+    link = args.strip()
+    if not link.startswith("http"):
+        send_message(chat_id, "Mandami un link Amazon valido dopo /aggiungi")
         return
-
-    link = parts[0]
-    try:
-        prezzo_scontato = float(parts[1].replace(",", "."))
-        prezzo_pieno = float(parts[2].replace(",", "."))
-    except ValueError:
-        send_message(chat_id, "I prezzi devono essere numeri, es: 23.14")
-        return
-
-    titolo_manuale = parts[3] if len(parts) > 3 and parts[3] else None
-    immagine_manuale = parts[4] if len(parts) > 4 and parts[4] else None
 
     asin, html = resolve_and_extract_asin(link)
-    titolo = titolo_manuale or extract_meta(html, "og:title")
-    immagine = immagine_manuale or extract_meta(html, "og:image")
+    titolo = extract_meta(html, "og:title")
+    immagine = extract_meta(html, "og:image")
+
+    # salva lo stato "in attesa di prezzi" per questa chat
+    set_state(f"pending_link_{chat_id}", link)
+    set_state(f"pending_titolo_{chat_id}", titolo)
+    set_state(f"pending_immagine_{chat_id}", immagine)
+    set_state(f"pending_asin_{chat_id}", asin)
+
+    if titolo:
+        send_message(chat_id, f"📦 {titolo}\n\nOra mandami i prezzi così:\nprezzo_scontato prezzo_pieno\n(es: 23.14 29.99)")
+    else:
+        send_message(chat_id, "⚠️ Non sono riuscito a leggere il titolo. Mandami comunque i prezzi, poi il titolo lo scrivi tu.")
+
+
+def handle_prezzi(chat_id, text):
+    pending_link = get_state(f"pending_link_{chat_id}", "")
+    if not pending_link:
+        return False  # non c'è nessuna richiesta in sospeso, ignora
+
+    parts = text.split()
+    if len(parts) < 2:
+        return False
+
+    try:
+        prezzo_scontato = float(parts[0].replace(",", "."))
+        prezzo_pieno = float(parts[1].replace(",", "."))
+    except ValueError:
+        return False
+
+    titolo = get_state(f"pending_titolo_{chat_id}", "")
+    immagine = get_state(f"pending_immagine_{chat_id}", "")
+    asin = get_state(f"pending_asin_{chat_id}", "")
 
     if not titolo:
-        send_message(chat_id,
-            "Non sono riuscito a leggere il titolo (Amazon ha bloccato la richiesta).\n"
-            "Riprova così:\n/aggiungi <link>;23.14;29.99;Nome prodotto;URL immagine")
-        return
+        titolo = " ".join(parts[2:]) if len(parts) > 2 else "(titolo da completare)"
 
     sconto_percento = round((1 - prezzo_scontato / prezzo_pieno) * 100)
     now = datetime.now(timezone.utc)
@@ -86,8 +96,8 @@ def handle_aggiungi(chat_id, args):
         "prezzo": str(prezzo_scontato).replace(".", ","),
         "prezzo_originale": str(prezzo_pieno).replace(".", ","),
         "sconto_percento": sconto_percento,
-        "link_affiliato": link,
-        "immagine_url": immagine or "",
+        "link_affiliato": pending_link,
+        "immagine_url": immagine,
         "ASIN": asin,
         "fonte": "manuale",
         "stato": "NUOVO",
@@ -96,8 +106,12 @@ def handle_aggiungi(chat_id, args):
         "pubblicato_il": "",
     })
 
-    nota_immagine = "" if immagine else "\n⚠️ Nessuna immagine — aggiungila a mano sul foglio prima che venga pubblicato."
-    send_message(chat_id, f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%{nota_immagine}")
+    # pulisce lo stato in sospeso
+    set_state(f"pending_link_{chat_id}", "")
+
+    nota = "" if immagine else "\n⚠️ Manca l'immagine — aggiungila a mano sul foglio."
+    send_message(chat_id, f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%{nota}")
+    return True
 
 
 def main():
@@ -114,6 +128,8 @@ def main():
         if text.startswith("/aggiungi"):
             args = text[len("/aggiungi"):].strip()
             handle_aggiungi(chat_id, args)
+        elif chat_id:
+            handle_prezzi(chat_id, text)
 
         set_state("last_update_id", str(update_id))
 
