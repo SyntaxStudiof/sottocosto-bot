@@ -35,12 +35,6 @@ def add_affiliate_tag(url):
     return url
 
 
-def get_updates(offset):
-    resp = requests.get(f"{API_URL}/getUpdates", params={"offset": offset, "timeout": 0})
-    resp.raise_for_status()
-    return resp.json().get("result", [])
-
-
 def send_message(chat_id, text):
     requests.post(f"{API_URL}/sendMessage", data={"chat_id": chat_id, "text": text})
 
@@ -83,12 +77,10 @@ def extract_image(html):
 
 
 def ask_next(chat_id):
-    """Guarda la coda dei campi mancanti e fa la prossima domanda, oppure salva se non ne restano."""
     queue_str = get_state(f"pending_queue_{chat_id}", "")
     if not queue_str:
         finalize(chat_id)
         return
-
     queue = queue_str.split(",")
     next_field = queue[0]
     send_message(chat_id, PROMPTS[next_field])
@@ -196,27 +188,3 @@ def handle_pending_reply(chat_id, text):
         finalize(chat_id)
 
     return True
-
-
-def main():
-    last_id = get_state("last_update_id", "0")
-    offset = int(last_id) + 1 if last_id else 0
-
-    updates = get_updates(offset)
-    for update in updates:
-        update_id = update["update_id"]
-        message = update.get("message", {})
-        text = message.get("text", "")
-        chat_id = message.get("chat", {}).get("id")
-
-        if text.startswith("/aggiungi"):
-            args = text[len("/aggiungi"):].strip()
-            handle_aggiungi(chat_id, args)
-        elif chat_id:
-            handle_pending_reply(chat_id, text)
-
-        set_state("last_update_id", str(update_id))
-
-
-if __name__ == "__main__":
-    main()
