@@ -18,10 +18,16 @@ def send_message(chat_id, text):
     requests.post(f"{API_URL}/sendMessage", data={"chat_id": chat_id, "text": text})
 
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "it-IT,it;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+
 def resolve_and_extract_asin(link):
-    """Segue eventuali redirect (es. amzn.to) e ricava l'ASIN dall'URL finale."""
-    resp = requests.get(link, allow_redirects=True, timeout=10,
-                         headers={"User-Agent": "Mozilla/5.0"})
+    resp = requests.get(link, allow_redirects=True, timeout=10, headers=HEADERS)
     final_url = resp.url
     match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", final_url)
     asin = match.group(1) if match else ""
@@ -30,7 +36,14 @@ def resolve_and_extract_asin(link):
 
 def extract_meta(html, prop):
     match = re.search(rf'<meta property="{prop}" content="([^"]+)"', html)
-    return match.group(1) if match else ""
+    if match:
+        return match.group(1)
+    # fallback per il titolo: prova il tag <title> della pagina
+    if prop == "og:title":
+        match = re.search(r"<title>([^<]+)</title>", html)
+        if match:
+            return match.group(1).replace(" : Amazon.it", "").strip()
+    return ""
 
 
 def handle_aggiungi(chat_id, args):
