@@ -69,12 +69,12 @@ def get_state(key, default=""):
 
 def set_state(key, value):
     ws = _get_config_worksheet()
+    value_str = str(value)
     cell = ws.find(key)
     if cell:
-        ws.update_cell(cell.row, 2, value)
+        ws.update_cell(cell.row, 2, value_str, value_input_option='RAW')
     else:
-        ws.append_row([key, value])
-
+        ws.append_row([key, value_str], value_input_option='RAW')
 
 def append_product_row(product_dict):
     """Aggiunge una nuova riga prodotto in coda, rispettando l'ordine delle colonne del foglio principale."""
