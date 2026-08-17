@@ -1,7 +1,7 @@
 import os
 from flask import Flask, request
 
-from telegram_commands import handle_aggiungi, handle_pending_reply
+from telegram_commands import handle_aggiungi, handle_pending_reply, handle_callback_query
 
 app = Flask(__name__)
 
@@ -9,6 +9,11 @@ app = Flask(__name__)
 @app.route("/webhook", methods=["POST"])
 def webhook():
     update = request.get_json(silent=True) or {}
+
+    if "callback_query" in update:
+        handle_callback_query(update["callback_query"])
+        return "", 200
+
     message = update.get("message", {})
     text = message.get("text", "")
     chat_id = message.get("chat", {}).get("id")
