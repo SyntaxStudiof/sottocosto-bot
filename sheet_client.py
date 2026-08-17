@@ -60,7 +60,7 @@ def _get_config_worksheet(client=None):
 
 def get_state(key, default=""):
     ws = _get_config_worksheet()
-    values = ws.get_all_records()
+    values = ws.get_all_records(numericise_ignore=['all'])
     for row in values:
         if row.get("chiave") == key:
             return str(row.get("valore", default))
