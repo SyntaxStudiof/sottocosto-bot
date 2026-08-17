@@ -39,6 +39,21 @@ def send_message(chat_id, text):
     requests.post(f"{API_URL}/sendMessage", data={"chat_id": chat_id, "text": text})
 
 
+def answer_callback(callback_id, text=""):
+    requests.post(f"{API_URL}/answerCallbackQuery", data={
+        "callback_query_id": callback_id,
+        "text": text,
+    })
+
+
+def edit_message(chat_id, message_id, text):
+    requests.post(f"{API_URL}/editMessageText", data={
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    })
+
+
 def resolve_and_extract_asin(link):
     resp = requests.get(link, allow_redirects=True, timeout=10, headers=HEADERS)
     final_url = resp.url
@@ -119,7 +134,6 @@ def finalize(chat_id):
         "pubblicato_il": "",
     })
 
-    # pulizia di tutti i valori temporanei per questa chat
     for campo in ["queue", "link", "titolo", "immagine", "asin", "prezzo_scontato", "prezzo_pieno"]:
         set_state(f"pending_{campo}_{chat_id}", "")
 
@@ -191,3 +205,60 @@ def handle_pending_reply(chat_id, text):
         finalize(chat_id)
 
     return True
+
+
+def handle_callback_query(callback_query):
+    callback_id = callback_query["id"]
+    data = callback_query.get("data", "")
+    chat_id = callback_query["message"]["chat"]["id"]
+    message_id = callback_query["message"]["message_id"]
+
+    if data.startswith("approva_"):
+        candidate_id = data[len("approva_"):]
+        link = get_state(f"pending_candidate_link_{candidate_id}", "")
+        prezzi_str = get_state(f"pending_candidate_prezzi_{candidate_id}", "")
+
+        if not link:
+            answer_callback(callback_id, "Candidato non trovato o già gestito.")
+            return
+
+        prezzi = [float(p.replace(",", ".")) for p in prezzi_str.split(",") if p]
+
+        if len(prezzi) >= 2:
+            prezzo_scontato = min(prezzi)
+            prezzo_pieno = max(prezzi)
+        elif len(prezzi) == 1:
+            prezzo_scontato = prezzi[0]
+            prezzo_pieno = prezzi[0]
+        else:
+            answer_callback(callback_id, "Prezzi mancanti, approvazione annullata.")
+            return
+
+        asin, _, final_url = resolve_and_extract_asin(link)
+        link_con_tag = add_affiliate_tag(final_url)
+        titolo = get_state(f"pending_candidate_testo_{candidate_id}", "")[:150]
+
+        sconto_percento = round((1 - prezzo_scontato / prezzo_pieno) * 100) if prezzo_pieno else 0
+        now = datetime.now(timezone.utc)
+
+        append_product_row({
+            "titolo": titolo,
+            "prezzo": str(prezzo_scontato).replace(".", ","),
+            "prezzo_originale": str(prezzo_pieno).replace(".", ","),
+            "sconto_percento": sconto_percento,
+            "link_affiliato": link_con_tag,
+            "immagine_url": "",
+            "ASIN": asin,
+            "fonte": "canale_terzo",
+            "stato": "NUOVO",
+            "aggiunto_il": now.isoformat(),
+            "scade_il": (now + timedelta(hours=4)).isoformat(),
+            "pubblicato_il": "",
+        })
+
+        answer_callback(callback_id, "Aggiunto!")
+        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n⚠️ Ricorda di aggiungere l'immagine a mano sul foglio.")
+
+    elif data.startswith("scarta_"):
+        answer_callback(callback_id, "Scartato.")
+        edit_message(chat_id, message_id, "❌ Scartato.")
