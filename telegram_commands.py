@@ -119,7 +119,10 @@ def finalize(chat_id):
         "pubblicato_il": "",
     })
 
-    set_state(f"pending_queue_{chat_id}", "")
+    # pulizia di tutti i valori temporanei per questa chat
+    for campo in ["queue", "link", "titolo", "immagine", "asin", "prezzo_scontato", "prezzo_pieno"]:
+        set_state(f"pending_{campo}_{chat_id}", "")
+
     send_message(chat_id, f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%")
 
 
