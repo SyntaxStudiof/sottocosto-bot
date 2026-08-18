@@ -3,6 +3,7 @@ import json
 import html as html_module
 import requests
 from datetime import datetime, timedelta, timezone
+from bs4 import BeautifulSoup  # <--- Aggiunto BeautifulSoup
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
 from sheet_client import get_state, set_state, append_product_row
@@ -55,7 +56,8 @@ def edit_message(chat_id, message_id, text):
 
 
 def resolve_and_extract_asin(link):
-    resp = requests.get(link, allow_redirects=True, timeout=10, headers=HEADERS)
+    # Aumentato il timeout a 20 secondi per evitare errori di connessione
+    resp = requests.get(link, allow_redirects=True, timeout=20, headers=HEADERS)
     final_url = resp.url
     match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", final_url)
     asin = match.group(1) if match else ""
@@ -63,31 +65,65 @@ def resolve_and_extract_asin(link):
 
 
 def extract_title(html):
-    match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
-    if match:
-        return match.group(1)
-    match = re.search(r"<title>([^<]+)</title>", html)
-    if match:
-        return match.group(1).replace(" : Amazon.it", "").strip()
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # 1. Cerca nei tag Open Graph
+    og_title = soup.find('meta', property='og:title')
+    if og_title and og_title.get('content'):
+        return og_title['content']
+    
+    # 2. Cerca nei tag Twitter
+    tw_title = soup.find('meta', attrs={'name': 'twitter:title'})
+    if tw_title and tw_title.get('content'):
+        return tw_title['content']
+    
+    # 3. Cerca nell'h1 dei prodotti Amazon (molto affidabile)
+    h1_tag = soup.find('h1', id='title')
+    if h1_tag:
+        return h1_tag.get_text(strip=True)
+    
+    # 4. Fallback finale sul tag <title>
+    title_tag = soup.find('title')
+    if title_tag:
+        return title_tag.get_text(strip=True).replace(" : Amazon.it", "").strip()
+        
     return ""
 
 
 def extract_image(html):
-    match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
-    if match:
-        return match.group(1)
-    match = re.search(r'data-old-hires="([^"]+)"', html)
-    if match and match.group(1):
-        return match.group(1)
-    match = re.search(r'data-a-dynamic-image="([^"]+)"', html)
-    if match:
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # 1. Cerca nei tag Open Graph
+    og_image = soup.find('meta', property='og:image')
+    if og_image and og_image.get('content'):
+        return og_image['content']
+    
+    # 2. Cerca nei tag Twitter
+    tw_image = soup.find('meta', attrs={'name': 'twitter:image'})
+    if tw_image and tw_image.get('content'):
+        return tw_image['content']
+    
+    # 3. Cerca nel tag data-old-hires
+    old_hires = soup.find('img', attrs={'data-old-hires': True})
+    if old_hires and old_hires.get('data-old-hires'):
+        return old_hires['data-old-hires']
+    
+    # 4. Cerca nell'immagine dinamica di Amazon (data-a-dynamic-image)
+    dynamic_img = soup.find('img', attrs={'data-a-dynamic-image': True})
+    if dynamic_img:
+        raw = dynamic_img['data-a-dynamic-image']
         try:
-            raw = html_module.unescape(match.group(1))
-            data = json.loads(raw)
+            data = json.loads(html_module.unescape(raw))
             if data:
                 return list(data.keys())[0]
-        except (json.JSONDecodeError, IndexError):
+        except:
             pass
+            
+    # 5. Cerca la prima immagine principale della pagina
+    main_img = soup.find('img', id='landingImage')
+    if main_img and main_img.get('src'):
+        return main_img['src']
+        
     return ""
 
 
@@ -241,18 +277,17 @@ def handle_callback_query(callback_query):
         if prezzo_pieno is None:
             prezzo_pieno = prezzo_scontato
 
-        # --- SOLUZIONE FINALE PER L'IMMAGINE ---
-        # 1. Scarica ASIN e HTML della pagina (nessuna richiesta extra!)
         asin, html_page, final_url = resolve_and_extract_asin(link)
-        # 2. Estrai l'immagine direttamente dall'HTML già scaricato, senza fare scraping aggiuntivo!
-        immagine_url = extract_image(html_page)
+        link_con_tag = add_affiliate_tag(final_url)
         
-        # Fallback di sicurezza: se non trova l'immagine, usa il widget.
+        titolo_finale = titolo if titolo else "Prodotto Amazon"
+
+        # Estrai immagine dall'HTML scaricato
+        immagine_url = extract_image(html_page)
+
+        # Fallback se l'immagine non viene estratta
         if not immagine_url and asin:
             immagine_url = f"https://ws-na.amazon-adsystem.com/widgets/q?_encoding=UTF8&ASIN={asin}&Format=_SL250_&ID=AsinImage&MarketPlace=IT&ServiceVersion=20070822&WS=1&tag={AFFILIATE_TAG}"
-
-        link_con_tag = add_affiliate_tag(final_url)
-        titolo_finale = titolo if titolo else "Prodotto Amazon"
 
         sconto_percento = 0
         if prezzo_pieno > 0:
@@ -266,7 +301,7 @@ def handle_callback_query(callback_query):
             "prezzo_originale": str(prezzo_pieno).replace(".", ","),
             "sconto_percento": sconto_percento,
             "link_affiliato": link_con_tag,
-            "immagine_url": immagine_url,  # <--- Ora è il link diretto (m.media-amazon)!
+            "immagine_url": immagine_url,
             "ASIN": asin,
             "fonte": "canale_terzo",
             "stato": "NUOVO",
@@ -279,7 +314,7 @@ def handle_callback_query(callback_query):
             set_state(f"pending_candidate_{campo}_{candidate_id}", "")
 
         answer_callback(callback_id, "Aggiunto!")
-        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n🖼 Immagine estratta correttamente dall'HTML!")
+        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n🖼 Immagine estratta correttamente!")
 
     elif data.startswith("scarta_"):
         candidate_id = data[len("scarta_"):]
