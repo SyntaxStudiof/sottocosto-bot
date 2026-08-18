@@ -5,3 +5,4 @@ requests
 flask
 gunicorn
 telethon
+beautifulsoup4
