@@ -3,7 +3,6 @@ import re
 import json
 import requests
 import html as html_module
-import time
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 from utils import clean_title, split_multiple_offers
@@ -30,7 +29,6 @@ AMAZON_URL_RE = re.compile(r'https?://(?:www\.)?(?:amazon\.[a-z.]+|amzn\.to|amzn
 PRICE_RE = re.compile(r'(\d+[.,]\d{2})\s*€')
 PRIME_KEYWORDS = ["tryprime", "gp/prime", "primevideo", "amazonprime", "primeday", "gp/video"]
 
-# --- FUNZIONI PER LO SCRAPING DI EMERGENZA ---
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "it-IT,it;q=0.9",
@@ -61,7 +59,6 @@ def extract_price(html):
     if match:
         return match.group(1).replace(".", ",")
     return None
-# --- FINE FUNZIONI SCRAPING ---
 
 def find_product_link(text):
     all_links = AMAZON_URL_RE.findall(text)
@@ -98,87 +95,82 @@ def process_channel(client, channel_username):
     last_id = int(get_state(last_id_key, "0") or "0")
     max_id_seen = last_id
 
-    # --- NUOVA LOGICA ANTI-DUPLICATI ---
-    # Carichiamo la lista degli ultimi messaggi già inviati per questo canale
-    processed_key = f"processed_ids_{channel_username}"
-    processed_ids_str = get_state(processed_key, "")
-    processed_ids = processed_ids_str.split(",") if processed_ids_str else []
-    
-    # Se la lista diventa troppo lunga (oltre 50), teniamo solo gli ultimi 30 per non appesantire il foglio
-    if len(processed_ids) > 50:
-        processed_ids = processed_ids[-30:]
+    processed_asin_key = f"processed_asins_{channel_username}"
+    processed_asins_str = get_state(processed_asin_key, "")
+    processed_asins = processed_asins_str.split(",") if processed_asins_str else []
+    if len(processed_asins) > 100:
+        processed_asins = processed_asins[-50:]
 
-    for message in client.iter_messages(channel_username, min_id=last_id, limit=20):
-        if message.id > max_id_seen:
-            max_id_seen = message.id
+    # --- CINTURA DI SICUREZZA: anche se il bot si blocca, salviamo comunque fino a che ID è arrivato ---
+    try:
+        for message in client.iter_messages(channel_username, min_id=last_id, limit=20):
+            if message.id > max_id_seen:
+                max_id_seen = message.id
 
-        text = message.text or ""
-        text_parts = split_multiple_offers(text)
-        
-        for single_offer_text in text_parts:
-            product_link = find_product_link(single_offer_text)
-            if not product_link:
-                continue
-
-            # --- CONTROLLO DUPLICATO ---
-            # Generiamo un ID univoco per questa offerta
-            candidate_id = f"{channel_username}_{message.id}_{abs(hash(single_offer_text))}"
+            text = message.text or ""
+            text_parts = split_multiple_offers(text)
             
-            # Se questo ID è già nella lista dei processati, saltiamo tutto!
-            if candidate_id in processed_ids:
-                continue
+            for single_offer_text in text_parts:
+                product_link = find_product_link(single_offer_text)
+                if not product_link:
+                    continue
 
-            prezzi_scontati = re.findall(r'[Pp]rezzo\s*in\s*offerta\s*[:.]?\s*(\d+[.,]\d{2})', single_offer_text)
-            prezzi_originali = re.findall(r'[Pp]rezzo\s*consigliato\s*[:.]?\s*(\d+[.,]\d{2})', single_offer_text)
+                asin, _, _ = resolve_and_extract_asin(product_link)
+                if asin:
+                    candidate_id = f"{channel_username}_{asin}"
+                else:
+                    candidate_id = f"{channel_username}_{message.id}"
 
-            prezzo_scontato = None
-            prezzo_originale = None
+                if candidate_id in processed_asins:
+                    continue
 
-            if prezzi_scontati:
-                prezzo_scontato = prezzi_scontati[0]
-            else:
-                all_prices = PRICE_RE.findall(single_offer_text)
-                if all_prices:
-                    float_prices = sorted([float(p.replace(',', '.')) for p in all_prices])
-                    prezzo_scontato = str(float_prices[0]).replace('.', ',')
-                    if len(float_prices) > 1:
-                        prezzo_originale = str(float_prices[-1]).replace('.', ',')
+                prezzi_scontati = re.findall(r'[Pp]rezzo\s*in\s*offerta\s*[:.]?\s*(\d+[.,]\d{2})', single_offer_text)
+                prezzi_originali = re.findall(r'[Pp]rezzo\s*consigliato\s*[:.]?\s*(\d+[.,]\d{2})', single_offer_text)
 
-            if prezzi_originali:
-                prezzo_originale = prezzi_originali[0]
+                prezzo_scontato = None
+                prezzo_originale = None
 
-            title_cleaned = clean_title(single_offer_text)
-            
-            # --- FALLBACK DI EMERGENZA PER I PREZZI ---
-            if prezzo_scontato is None:
-                try:
-                    _, html_page, _ = resolve_and_extract_asin(product_link)
-                    scraped_price = extract_price(html_page)
-                    if scraped_price:
-                        prezzo_scontato = scraped_price
-                        prezzo_originale = None
-                except:
-                    pass
-            
-            # Salviamo i dati
-            set_state(f"pending_candidate_link_{candidate_id}", product_link)
-            set_state(f"pending_candidate_testo_{candidate_id}", title_cleaned)  
-            set_state(f"pending_candidate_prezzo_scontato_{candidate_id}", prezzo_scontato)
-            set_state(f"pending_candidate_prezzo_originale_{candidate_id}", prezzo_originale)
+                if prezzi_scontati:
+                    prezzo_scontato = prezzi_scontati[0]
+                else:
+                    all_prices = PRICE_RE.findall(single_offer_text)
+                    if all_prices:
+                        float_prices = sorted([float(p.replace(',', '.')) for p in all_prices])
+                        prezzo_scontato = str(float_prices[0]).replace('.', ',')
+                        if len(float_prices) > 1:
+                            prezzo_originale = str(float_prices[-1]).replace('.', ',')
 
-            # Mandiamo l'anteprima
-            send_proposal(candidate_id, title_cleaned, product_link, prezzo_scontato, prezzo_originale)
+                if prezzi_originali:
+                    prezzo_originale = prezzi_originali[0]
 
-            # --- SALVIAMO L'ID COME "GIÀ PROCESSATO" ---
-            processed_ids.append(candidate_id)
-            # Salviamo la lista aggiornata nel foglio (mantenendo solo gli ultimi 30 per non farlo diventare enorme)
-            if len(processed_ids) > 30:
-                processed_ids = processed_ids[-30:]
-            set_state(processed_key, ",".join(processed_ids))
+                title_cleaned = clean_title(single_offer_text)
+                
+                if prezzo_scontato is None:
+                    try:
+                        _, html_page, _ = resolve_and_extract_asin(product_link)
+                        scraped_price = extract_price(html_page)
+                        if scraped_price:
+                            prezzo_scontato = scraped_price
+                            prezzo_originale = None
+                    except:
+                        pass
 
-    # Aggiorniamo l'ultimo ID visitato (per le prossime esecuzioni)
-    if max_id_seen > last_id:
-        set_state(last_id_key, str(max_id_seen))
+                set_state(f"pending_candidate_link_{candidate_id}", product_link)
+                set_state(f"pending_candidate_testo_{candidate_id}", title_cleaned)  
+                set_state(f"pending_candidate_prezzo_scontato_{candidate_id}", prezzo_scontato)
+                set_state(f"pending_candidate_prezzo_originale_{candidate_id}", prezzo_originale)
+
+                send_proposal(candidate_id, title_cleaned, product_link, prezzo_scontato, prezzo_originale)
+
+                processed_asins.append(candidate_id)
+                if len(processed_asins) > 50:
+                    processed_asins = processed_asins[-50:]
+                set_state(processed_asin_key, ",".join(processed_asins))
+
+    finally:
+        # --- QUESTO BLOCCA TUTTO: salva l'ID anche se il bot è andato in crash durante il loop ---
+        if max_id_seen > last_id:
+            set_state(last_id_key, str(max_id_seen))
 
 def main():
     with TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH) as client:
