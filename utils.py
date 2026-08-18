@@ -19,12 +19,29 @@ def clean_title(raw_text):
     text = re.sub(r'VAI ALL\'', '', text, flags=re.IGNORECASE)
     text = re.sub(r'#\w+', '', text)
     
-    # 5. IL TRUCCO FINALE: Cancella TUTTI i simboli di parentesi tonde, quadre e graffe
-    # Questa riga elimina la ( anche se è rimasta da sola, senza cercare la sua compagna )
+    # 5. Rimuovi TUTTI i simboli di parentesi tonde, quadre e graffe
     text = re.sub(r'[\(\)\[\]\{\}]', '', text)
     
     # 6. Pulisci gli spazi extra
     text = ' '.join(text.split())
+    
+    # --- FALLBACK INTELLIGENTE (SENZA SCRAPING) ---
+    # Se dopo tutta la pulizia il testo è troppo corto (es. è rimasto vuoto),
+    # allora usiamo il testo originale, gli togliamo solo le cose minime (link e VAI ALL'OFFERTA)
+    # e prendiamo i primi 150 caratteri per avere un titolo!
+    if len(text.strip()) < 5:
+        fallback = raw_text
+        fallback = re.sub(r'https?://\S+', '', fallback)
+        fallback = re.sub(r'VAI ALL\'OFFERTA', '', fallback, flags=re.IGNORECASE)
+        fallback = re.sub(r'#\w+', '', fallback)
+        fallback = ' '.join(fallback.split())
+        if len(fallback) > 150:
+            fallback = fallback[:147] + "..."
+        
+        if fallback.strip():
+            return fallback.strip()
+        else:
+            return "Prodotto Amazon (controlla)"
     
     return text.strip()
 
