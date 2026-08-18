@@ -7,20 +7,19 @@ def clean_title(raw_text):
     text = re.sub(r'\*\*', '', text)
     text = re.sub(r'__', '', text)
     
-    # 2. Rimuovi TUTTE le etichette di prezzo e le parentesi attaccate.
-    # Questa regex è "intelligente": cattura "Prezzo in offerta", "Prezzo consigliato",
-    # il numero, l'euro, e anche la parentesi tonda "(" che a volte rimane attaccata.
-    text = re.sub(r'[Pp]rezzo\s*[a-zA-Z\s]*?[:.]?\s*\d+[.,]?\d*\s?[€€]\s*[\(\)]?', '', text)
+    # 2. Rimuovi TUTTE le etichette di prezzo, anche se attaccate a spazi e simboli
+    text = re.sub(r'[Pp]rezzo\s*[a-zA-Z\s]*?[:.]?\s*\d+[.,]?\d*\s?[€€]\s*', '', text)
     
     # 3. Rimuovi tutti gli URL (link Amazon, ecc.)
     text = re.sub(r'https?://\S+', '', text)
     
-    # 4. Rimuovi parentesi quadre, tag e hashtag
-    text = re.sub(r'\[.*?\]', '', text)
-    text = re.sub(r'\(.*?\)', '', text)
+    # 4. Rimuovi tutte le parentesi tonde ( ), quadre [ ] e graffe { } rimaste
+    text = re.sub(r'[\(\)\[\]\{\}]', '', text)
+    
+    # 5. Rimuovi hashtag o tag rimasti
     text = re.sub(r'#\w+', '', text)
     
-    # 5. Pulisci gli spazi extra e ritorni a capo
+    # 6. Pulisci gli spazi extra (trasforma spazi multipli in uno singolo)
     text = ' '.join(text.split())
     
     return text.strip()
