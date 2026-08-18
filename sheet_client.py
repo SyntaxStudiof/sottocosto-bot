@@ -14,7 +14,10 @@ def _get_worksheet():
     creds_dict = json.loads(CREDS_JSON)
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     client = gspread.authorize(creds)
-    return client.open_by_key(SHEET_ID).sheet1
+    # --- CORREZIONE FONDAMENTALE ---
+    # Invece di usare .sheet1 (che prende il PRIMO foglio in ordine),
+    # usiamo .worksheet("Foglio1") per indirizzare esattamente il tab corretto.
+    return client.open_by_key(SHEET_ID).worksheet("Foglio1")
 
 
 def get_all_rows():
