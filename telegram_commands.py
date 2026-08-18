@@ -143,6 +143,7 @@ def ask_next(chat_id):
     send_message(chat_id, PROMPTS[next_field])
 
 
+# --- FUNZIONE FINALIZE RISCRITTA CON GESTIONE TIMEOUT ---
 def finalize(chat_id):
     link = get_state(f"pending_link_{chat_id}", "")
     titolo = get_state(f"pending_titolo_{chat_id}", "")
@@ -151,21 +152,34 @@ def finalize(chat_id):
     prezzo_scontato = get_state(f"pending_prezzo_scontato_{chat_id}", "")
     prezzo_pieno = get_state(f"pending_prezzo_pieno_{chat_id}", "")
 
-    # --- FASE 1: Controllo e conversione prezzi ---
+    # --- FASE 1: Controllo prezzi ---
     try:
         prezzo_scontato_f = float(prezzo_scontato.replace(",", "."))
         prezzo_pieno_f = float(prezzo_pieno.replace(",", "."))
     except ValueError:
-        send_message(chat_id, "❌ Errore nei prezzi salvati (non sono numeri validi). Riprova da capo con /aggiungi.")
+        send_message(chat_id, "❌ Errore nei prezzi salvati. Riprova da capo con /aggiungi.")
         for campo in ["queue", "link", "titolo", "immagine", "asin", "prezzo_scontato", "prezzo_pieno"]:
             set_state(f"pending_{campo}_{chat_id}", "")
         return
 
-    # --- FASE 2: Salvataggio su Google Sheets (con gestione errori) ---
+    # --- FASE 2: Risposta IMMEDIATA per evitare timeout di Telegram ---
+    # Il bot risponde subito con un messaggio di attesa, così Telegram non chiude la connessione
+    loading_msg = send_message(chat_id, "⏳ Salvataggio su Google Sheets in corso... attendi qualche secondo.")
+    
+    # Se send_message fallisce, loading_msg è None. Gestiamo il caso.
+    loading_msg_id = None
+    if loading_msg and loading_msg.status_code == 200:
+        try:
+            loading_msg_id = loading_msg.json()["result"]["message_id"]
+        except:
+            pass
+
+    # --- FASE 3: Salvataggio su Google Sheets (con massima gestione errori) ---
     try:
         sconto_percento = round((1 - prezzo_scontato_f / prezzo_pieno_f) * 100)
         now = datetime.now(timezone.utc)
 
+        # Prova a salvare su Google
         append_product_row({
             "titolo": titolo,
             "prezzo": str(prezzo_scontato_f).replace(".", ","),
@@ -181,19 +195,23 @@ def finalize(chat_id):
             "pubblicato_il": "",
         })
 
-        send_message(chat_id, f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%")
+        # Se il salvataggio è riuscito, modifichiamo il messaggio di caricamento con la conferma
+        success_text = f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%"
+        if loading_msg_id:
+            edit_message(chat_id, loading_msg_id, success_text)
+        else:
+            send_message(chat_id, success_text)
         
     except Exception as e:
-        # Qui catturiamo QUALSIASI errore (rete, colonne sbagliate, timeout)
-        error_msg = str(e)
-        send_message(
-            chat_id, 
-            f"❌ ERRORE nel salvataggio su Google Sheets:\n\n{error_msg}\n\n"
-            f"Controlla che le colonne di 'Foglio1' siano esattamente:\n"
-            f"'titolo', 'prezzo', 'prezzo_originale', 'sconto_percento', 'link_affiliato', 'immagine_url', 'ASIN', 'fonte', 'stato', 'aggiunto_il', 'scade_il', 'pubblicato_il'."
-        )
+        # Se c'è un errore, modifichiamo il messaggio di caricamento con l'errore
+        error_text = f"❌ ERRORE nel salvataggio su Google Sheets:\n\n{str(e)}\n\nControlla le colonne del foglio."
+        if loading_msg_id:
+            edit_message(chat_id, loading_msg_id, error_text)
+        else:
+            send_message(chat_id, error_text)
+            
     finally:
-        # Pulisce sempre lo stato, anche se ha dato errore
+        # Pulisce lo stato
         for campo in ["queue", "link", "titolo", "immagine", "asin", "prezzo_scontato", "prezzo_pieno"]:
             set_state(f"pending_{campo}_{chat_id}", "")
 
