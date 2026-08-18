@@ -1,6 +1,6 @@
 import re
 
-# Regex per trovare il link Amazon (serve qui per decidere come dividere i messaggi)
+# Regex per trovare il link Amazon
 AMAZON_URL_RE = re.compile(r'https?://(?:www\.)?(?:amazon\.[a-z.]+|amzn\.to|amzn\.eu)/\S+')
 
 def clean_title(raw_text):
@@ -17,6 +17,11 @@ def clean_title(raw_text):
     text = re.sub(r'VAI ALL\'OFFERTA', '', text, flags=re.IGNORECASE)
     text = re.sub(r'#\w+', '', text)
     text = re.sub(r'[\(\)\[\]\{\}]', '', text)
+    
+    # --- NUOVO: Rimuovi i disclaimer e le scritte del footer ---
+    text = re.sub(r'Disclaimer\s*[-–]\s*Condividi\s*su\s*WA', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Condividi\s*su\s*WA', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Disclaimer', '', text, flags=re.IGNORECASE)
     
     # 3. Pulisci gli spazi
     text = ' '.join(text.split())
@@ -36,7 +41,7 @@ def clean_title(raw_text):
         else:
             return "Prodotto Amazon (controlla anteprima)"
     
-    # --- MODIFICA QUI: Aumentato il limite a 200 caratteri ---
+    # --- MODIFICA LIMITE A 200 CARATTERI ---
     if len(text) > 200:
         return text[:197] + "..."
         
@@ -46,8 +51,6 @@ def clean_title(raw_text):
 def split_multiple_offers(text):
     """
     Divide il messaggio in offerte in modo INTELLIGENTE.
-    Usa il doppio a capo (\n\n) per dividere, ma se un pezzo non ha il link Amazon,
-    lo attacca automaticamente al pezzo precedente (per non spezzare le offerte singole).
     """
     # Dividi il testo in base a dove ci sono doppi a capo
     parts = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
@@ -65,19 +68,17 @@ def split_multiple_offers(text):
             else:
                 final_offers.append(part)
         else:
-            # Se questa parte NON ha un link Amazon, è un pezzo di descrizione.
+            # Se questa parte NON ha un link Amazon, è un pezzo di descrizione/footer.
             # Aggiungilo al buffer per unirlo al prossimo pezzo che ha il link.
             if buffer:
                 buffer += f"\n\n{part}"
             else:
                 buffer = part
     
-    # Se alla fine del ciclo è rimasto del testo nel buffer (es. messaggio senza link alla fine),
-    # attaccalo all'ultima offerta trovata.
+    # Se alla fine del ciclo è rimasto del testo nel buffer, attaccalo all'ultima offerta.
     if buffer and final_offers:
         final_offers[-1] += f"\n\n{buffer}"
     elif buffer and not final_offers:
-        # Fallback: Se non ha trovato nessun link, restituisci il buffer come offerta unica
         final_offers.append(buffer)
             
     return final_offers
