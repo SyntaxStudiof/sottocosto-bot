@@ -3,6 +3,7 @@ import re
 import json
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
+from utils import clean_title
 import requests
 
 from sheet_client import get_state, set_state
@@ -79,14 +80,22 @@ def process_channel(client, channel_username):
         if not product_link:
             continue
 
-        prezzi = PRICE_RE.findall(text)
+        # 1. Estraiamo i prezzi dal testo ORIGINALE (prima di pulirlo)
+        prezzi = PRICE_RE.findall(text) 
+
+        # 2. PULIAMO il titolo usando la funzione che hai salvato nel file utils.py
+        # Questa riga toglie i link, i prezzi e le parole inutili dal titolo
+        title_cleaned = clean_title(text)
 
         candidate_id = f"{channel_username}_{message.id}"
+        
+        # 3. Salviamo nel foglio Google il titolo PULITO, non quello sporco
         set_state(f"pending_candidate_link_{candidate_id}", product_link)
-        set_state(f"pending_candidate_testo_{candidate_id}", text[:500])
+        set_state(f"pending_candidate_testo_{candidate_id}", title_cleaned)  
         set_state(f"pending_candidate_prezzi_{candidate_id}", ",".join(prezzi))
 
-        send_proposal(candidate_id, text, product_link, prezzi)
+        # 4. Mandiamo al proprietario (a te) il titolo PULITO per l'approvazione
+        send_proposal(candidate_id, title_cleaned, product_link, prezzi)
 
     if max_id_seen > last_id:
         set_state(last_id_key, str(max_id_seen))
