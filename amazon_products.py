@@ -28,14 +28,21 @@ def pick_next_product(min_discount=MIN_DISCOUNT_PERCENT):
     for row in rows:
         if not row.get("titolo"):
             continue
+            
+        # --- CONTROLLO FONDAMENTALE: Salta le offerte senza immagine ---
+        if not row.get("immagine_url", "").strip():
+            continue
+
         try:
             sconto = int(row.get("sconto_percento", 0))
         except ValueError:
             sconto = 0
+            
         if sconto < min_discount:
             continue
         if not _is_valid(row):
             continue
+            
         candidates.append(row)
 
     if not candidates:
