@@ -224,7 +224,6 @@ def handle_callback_query(callback_query):
             answer_callback(callback_id, "Candidato non trovato o già gestito.")
             return
 
-        # Converte i prezzi da stringa a numero decimale
         prezzo_scontato = None
         prezzo_pieno = None
         try:
@@ -236,17 +235,23 @@ def handle_callback_query(callback_query):
             answer_callback(callback_id, "Errore nel formato dei prezzi.")
             return
 
-        # Controlli per evitare errori
         if prezzo_scontato is None:
             answer_callback(callback_id, "Prezzo scontato mancante, approvazione annullata.")
             return
         if prezzo_pieno is None:
-            prezzo_pieno = prezzo_scontato  # Se manca il prezzo pieno, usiamo lo scontato
+            prezzo_pieno = prezzo_scontato
 
         asin, _, final_url = resolve_and_extract_asin(link)
         link_con_tag = add_affiliate_tag(final_url)
         
         titolo_finale = titolo if titolo else "Prodotto Amazon"
+
+        # --- GENERAZIONE IMMAGINE TRAMITE ASIN (SENZA SCRAPING) ---
+        # Usa il servizio Amazon Ads per generare l'immagine
+        if asin:
+            immagine_url = f"https://ws-na.amazon-adsystem.com/widgets/q?_encoding=UTF8&ASIN={asin}&Format=_SL250_&ID=AsinImage&MarketPlace=IT&ServiceVersion=20070822&WS=1&tag={AFFILIATE_TAG}"
+        else:
+            immagine_url = ""
 
         sconto_percento = 0
         if prezzo_pieno > 0:
@@ -260,7 +265,7 @@ def handle_callback_query(callback_query):
             "prezzo_originale": str(prezzo_pieno).replace(".", ","),
             "sconto_percento": sconto_percento,
             "link_affiliato": link_con_tag,
-            "immagine_url": "",
+            "immagine_url": immagine_url,  # <--- Ora l'immagine viene salvata!
             "ASIN": asin,
             "fonte": "canale_terzo",
             "stato": "NUOVO",
@@ -269,16 +274,14 @@ def handle_callback_query(callback_query):
             "pubblicato_il": "",
         })
 
-        # Pulisce i dati temporanei
         for campo in ["link", "testo", "prezzo_scontato", "prezzo_originale"]:
             set_state(f"pending_candidate_{campo}_{candidate_id}", "")
 
         answer_callback(callback_id, "Aggiunto!")
-        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n⚠️ Ricorda di aggiungere l'immagine a mano sul foglio.")
+        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n🖼 Immagine generata dall'ASIN (senza scraping).")
 
     elif data.startswith("scarta_"):
         candidate_id = data[len("scarta_"):]
-        # Pulisce i dati temporanei anche quando scarti
         for campo in ["link", "testo", "prezzo_scontato", "prezzo_originale"]:
             set_state(f"pending_candidate_{campo}_{candidate_id}", "")
         answer_callback(callback_id, "Scartato.")
