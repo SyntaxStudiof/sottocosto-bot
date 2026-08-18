@@ -3,6 +3,7 @@ import re
 import json
 import requests
 import html as html_module
+from datetime import datetime, timedelta, timezone  # <--- Aggiunto per il limite di 24 ore
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
 from utils import clean_title, split_multiple_offers
@@ -101,11 +102,18 @@ def process_channel(client, channel_username):
     if len(processed_asins) > 100:
         processed_asins = processed_asins[-50:]
 
-    # --- CINTURA DI SICUREZZA: anche se il bot si blocca, salviamo comunque fino a che ID è arrivato ---
+    offers_found_here = 0  # <--- Contatore per le offerte trovate in questo canale
+    now = datetime.now(timezone.utc)
+
     try:
         for message in client.iter_messages(channel_username, min_id=last_id, limit=20):
             if message.id > max_id_seen:
                 max_id_seen = message.id
+
+            # --- CONTROLLO TEMPORALE: Ignora i messaggi più vecchi di 24 ore ---
+            message_date = message.date.replace(tzinfo=timezone.utc)
+            if message_date < now - timedelta(hours=24):
+                continue
 
             text = message.text or ""
             text_parts = split_multiple_offers(text)
@@ -166,19 +174,33 @@ def process_channel(client, channel_username):
                 if len(processed_asins) > 50:
                     processed_asins = processed_asins[-50:]
                 set_state(processed_asin_key, ",".join(processed_asins))
+                
+                offers_found_here += 1  # <--- Contiamo l'offerta trovata
 
     finally:
-        # --- QUESTO BLOCCA TUTTO: salva l'ID anche se il bot è andato in crash durante il loop ---
+        # Salva l'ultimo ID visitato, anche se il bot si blocca
         if max_id_seen > last_id:
             set_state(last_id_key, str(max_id_seen))
 
+    return offers_found_here  # <--- Restituisce il conto al main
+
 def main():
+    total_offers_found = 0
+    
     with TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH) as client:
         for channel in CHANNELS:
             try:
-                process_channel(client, channel)
+                offers_found = process_channel(client, channel)
+                total_offers_found += offers_found
             except Exception as e:
                 print(f"Errore su {channel}: {e}")
+
+    # --- MESSAGGIO SE NON TROVA NULLA ---
+    if total_offers_found == 0:
+        requests.post(f"{BOT_API_URL}/sendMessage", data={
+            "chat_id": OWNER_CHAT_ID,
+            "text": "🔍 Scansione completata: nessuna nuova offerta trovata in tutti i canali."
+        })
 
 if __name__ == "__main__":
     main()
