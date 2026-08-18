@@ -1,5 +1,8 @@
 import re
 
+# Regex per trovare il link Amazon (serve qui per decidere come dividere i messaggi)
+AMAZON_URL_RE = re.compile(r'https?://(?:www\.)?(?:amazon\.[a-z.]+|amzn\.to|amzn\.eu)/\S+')
+
 def clean_title(raw_text):
     text = raw_text
     
@@ -18,26 +21,22 @@ def clean_title(raw_text):
     # 3. Pulisci gli spazi
     text = ' '.join(text.split())
     
-    # --- FALLBACK DEFINITIVO (ANTI-TITOLO VUOTO) ---
-    # Se il titolo è troppo corto (es. è rimasto vuoto), usiamo il testo originale
+    # --- FALLBACK ANTI-TITOLO VUOTO ---
     if len(text.strip()) < 5:
         fallback = raw_text
-        # Togliamo solo i link e le parole davvero inutili
         fallback = re.sub(r'https?://\S+', '', fallback)
         fallback = re.sub(r'#\w+', '', fallback)
         fallback = re.sub(r'[\(\)\[\]\{\}]', '', fallback)
         fallback = ' '.join(fallback.split())
         
         if fallback.strip():
-            # Se il testo c'è, taglialo a max 100 caratteri
             if len(fallback) > 100:
                 return fallback[:97] + "..."
             return fallback.strip()
         else:
-            # Fallback assoluto nel caso sia tutto spazzatura
             return "Prodotto Amazon (controlla anteprima)"
     
-    # 4. Se è molto lungo, accorcialo per il foglio Google
+    # 4. Accorcia se troppo lungo
     if len(text) > 100:
         return text[:97] + "..."
         
@@ -45,9 +44,40 @@ def clean_title(raw_text):
 
 
 def split_multiple_offers(text):
-    separators = [r'\n-+\n', r'\n\s*\n', r'✅', r'❌', r'🔹', r'🔸', r'⬇️']
-    for sep in separators:
-        parts = re.split(sep, text)
-        if len(parts) > 1:
-            return [p.strip() for p in parts if p.strip()]
-    return [text.strip()]
+    """
+    Divide il messaggio in offerte in modo INTELLIGENTE.
+    Usa il doppio a capo (\n\n) per dividere, ma se un pezzo non ha il link Amazon,
+    lo attacca automaticamente al pezzo precedente (per non spezzare le offerte singole).
+    """
+    # Dividi il testo in base a dove ci sono doppi a capo
+    parts = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
+    
+    final_offers = []
+    buffer = ""
+    
+    for part in parts:
+        # Controlla se questa parte contiene un link Amazon valido
+        if AMAZON_URL_RE.search(part):
+            # Se avevamo del testo in attesa nel buffer, uniscilo a questa offerta
+            if buffer:
+                final_offers.append(f"{buffer}\n\n{part}")
+                buffer = ""
+            else:
+                final_offers.append(part)
+        else:
+            # Se questa parte NON ha un link Amazon, è un pezzo di descrizione.
+            # Aggiungilo al buffer per unirlo al prossimo pezzo che ha il link.
+            if buffer:
+                buffer += f"\n\n{part}"
+            else:
+                buffer = part
+    
+    # Se alla fine del ciclo è rimasto del testo nel buffer (es. messaggio senza link alla fine),
+    # attaccalo all'ultima offerta trovata.
+    if buffer and final_offers:
+        final_offers[-1] += f"\n\n{buffer}"
+    elif buffer and not final_offers:
+        # Fallback: Se non ha trovato nessun link, restituisci il buffer come offerta unica
+        final_offers.append(buffer)
+            
+    return final_offers
