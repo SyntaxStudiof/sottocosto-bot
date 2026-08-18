@@ -66,35 +66,28 @@ def resolve_and_extract_asin(link):
 def extract_title(html):
     soup = BeautifulSoup(html, 'html.parser')
     
-    # Se Amazon ha bloccato la richiesta con un Captcha, restituisci vuoto per forzare la richiesta manuale
     if soup.find('form', {'action': '/errors/validateCaptcha'}):
         return ""
 
     titolo = ""
-    
-    # 1. Cerca nell'h1 (il titolo principale di Amazon - il più affidabile)
     h1_tag = soup.find('h1', id='title')
     if h1_tag:
         titolo = h1_tag.get_text(strip=True)
-        # Togli la scritta "- Amazon.it" dalla fine
         titolo = re.sub(r'\s*[–|-]\s*Amazon\.(it|com|co\.uk)$', '', titolo, flags=re.IGNORECASE)
         return titolo.strip()
     
-    # 2. Cerca nei tag Open Graph
     og_title = soup.find('meta', property='og:title')
     if og_title and og_title.get('content'):
         titolo = og_title['content']
         titolo = re.sub(r'\s*[–|-]\s*Amazon\.(it|com|co\.uk)$', '', titolo, flags=re.IGNORECASE)
         return titolo.strip()
     
-    # 3. Cerca nei tag Twitter
     tw_title = soup.find('meta', attrs={'name': 'twitter:title'})
     if tw_title and tw_title.get('content'):
         titolo = tw_title['content']
         titolo = re.sub(r'\s*[–|-]\s*Amazon\.(it|com|co\.uk)$', '', titolo, flags=re.IGNORECASE)
         return titolo.strip()
     
-    # 4. Cerca nel tag <title> con pulizia accurata
     title_tag = soup.find('title')
     if title_tag:
         titolo = title_tag.get_text(strip=True)
@@ -108,21 +101,17 @@ def extract_title(html):
 def extract_image(html):
     soup = BeautifulSoup(html, 'html.parser')
     
-    # Se c'è un Captcha, non cercare l'immagine
     if soup.find('form', {'action': '/errors/validateCaptcha'}):
         return ""
 
-    # 1. Cerca l'immagine principale di Amazon tramite ID (il più affidabile)
     main_img = soup.find('img', id='landingImage')
     if main_img and main_img.get('src'):
         return main_img['src']
     
-    # 2. Cerca data-old-hires
     old_hires = soup.find('img', attrs={'data-old-hires': True})
     if old_hires and old_hires.get('data-old-hires'):
         return old_hires['data-old-hires']
     
-    # 3. Cerca nel tag data-a-dynamic-image (codifica JSON di Amazon)
     dynamic_img = soup.find('img', attrs={'data-a-dynamic-image': True})
     if dynamic_img:
         raw = dynamic_img['data-a-dynamic-image']
@@ -133,12 +122,10 @@ def extract_image(html):
         except:
             pass
             
-    # 4. Cerca nei tag Open Graph
     og_image = soup.find('meta', property='og:image')
     if og_image and og_image.get('content'):
         return og_image['content']
     
-    # 5. Cerca nei tag Twitter
     tw_image = soup.find('meta', attrs={'name': 'twitter:image'})
     if tw_image and tw_image.get('content'):
         return tw_image['content']
@@ -164,35 +151,51 @@ def finalize(chat_id):
     prezzo_scontato = get_state(f"pending_prezzo_scontato_{chat_id}", "")
     prezzo_pieno = get_state(f"pending_prezzo_pieno_{chat_id}", "")
 
+    # --- FASE 1: Controllo e conversione prezzi ---
     try:
         prezzo_scontato_f = float(prezzo_scontato.replace(",", "."))
         prezzo_pieno_f = float(prezzo_pieno.replace(",", "."))
     except ValueError:
-        send_message(chat_id, "Errore nei prezzi salvati, riprova da capo con /aggiungi")
+        send_message(chat_id, "❌ Errore nei prezzi salvati (non sono numeri validi). Riprova da capo con /aggiungi.")
+        for campo in ["queue", "link", "titolo", "immagine", "asin", "prezzo_scontato", "prezzo_pieno"]:
+            set_state(f"pending_{campo}_{chat_id}", "")
         return
 
-    sconto_percento = round((1 - prezzo_scontato_f / prezzo_pieno_f) * 100)
-    now = datetime.now(timezone.utc)
+    # --- FASE 2: Salvataggio su Google Sheets (con gestione errori) ---
+    try:
+        sconto_percento = round((1 - prezzo_scontato_f / prezzo_pieno_f) * 100)
+        now = datetime.now(timezone.utc)
 
-    append_product_row({
-        "titolo": titolo,
-        "prezzo": str(prezzo_scontato_f).replace(".", ","),
-        "prezzo_originale": str(prezzo_pieno_f).replace(".", ","),
-        "sconto_percento": sconto_percento,
-        "link_affiliato": link,
-        "immagine_url": immagine,
-        "ASIN": asin,
-        "fonte": "manuale",
-        "stato": "NUOVO",
-        "aggiunto_il": now.isoformat(),
-        "scade_il": (now + timedelta(hours=4)).isoformat(),
-        "pubblicato_il": "",
-    })
+        append_product_row({
+            "titolo": titolo,
+            "prezzo": str(prezzo_scontato_f).replace(".", ","),
+            "prezzo_originale": str(prezzo_pieno_f).replace(".", ","),
+            "sconto_percento": sconto_percento,
+            "link_affiliato": link,
+            "immagine_url": immagine,
+            "ASIN": asin,
+            "fonte": "manuale",
+            "stato": "NUOVO",
+            "aggiunto_il": now.isoformat(),
+            "scade_il": (now + timedelta(hours=4)).isoformat(),
+            "pubblicato_il": "",
+        })
 
-    for campo in ["queue", "link", "titolo", "immagine", "asin", "prezzo_scontato", "prezzo_pieno"]:
-        set_state(f"pending_{campo}_{chat_id}", "")
-
-    send_message(chat_id, f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%")
+        send_message(chat_id, f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%")
+        
+    except Exception as e:
+        # Qui catturiamo QUALSIASI errore (rete, colonne sbagliate, timeout)
+        error_msg = str(e)
+        send_message(
+            chat_id, 
+            f"❌ ERRORE nel salvataggio su Google Sheets:\n\n{error_msg}\n\n"
+            f"Controlla che le colonne di 'Foglio1' siano esattamente:\n"
+            f"'titolo', 'prezzo', 'prezzo_originale', 'sconto_percento', 'link_affiliato', 'immagine_url', 'ASIN', 'fonte', 'stato', 'aggiunto_il', 'scade_il', 'pubblicato_il'."
+        )
+    finally:
+        # Pulisce sempre lo stato, anche se ha dato errore
+        for campo in ["queue", "link", "titolo", "immagine", "asin", "prezzo_scontato", "prezzo_pieno"]:
+            set_state(f"pending_{campo}_{chat_id}", "")
 
 
 def handle_aggiungi(chat_id, args):
@@ -207,10 +210,8 @@ def handle_aggiungi(chat_id, args):
     link_con_tag = add_affiliate_tag(final_url)
 
     queue = []
-    # Se non trova il titolo, lo mette in coda per chiedertelo a mano
     if not titolo:
         queue.append("titolo")
-    # Se non trova l'immagine, la mette in coda per chiedertela a mano
     if not immagine:
         queue.append("immagine")
     queue.append("prezzo_scontato")
@@ -300,10 +301,7 @@ def handle_callback_query(callback_query):
 
         asin, html_page, final_url = resolve_and_extract_asin(link)
         link_con_tag = add_affiliate_tag(final_url)
-        
         titolo_finale = titolo if titolo else "Prodotto Amazon"
-
-        # Cerca di estrarre l'immagine dall'HTML appena scaricato
         immagine_url = extract_image(html_page)
 
         sconto_percento = 0
@@ -312,26 +310,29 @@ def handle_callback_query(callback_query):
         
         now = datetime.now(timezone.utc)
 
-        append_product_row({
-            "titolo": titolo_finale,
-            "prezzo": str(prezzo_scontato).replace(".", ","),
-            "prezzo_originale": str(prezzo_pieno).replace(".", ","),
-            "sconto_percento": sconto_percento,
-            "link_affiliato": link_con_tag,
-            "immagine_url": immagine_url,
-            "ASIN": asin,
-            "fonte": "canale_terzo",
-            "stato": "NUOVO",
-            "aggiunto_il": now.isoformat(),
-            "scade_il": (now + timedelta(hours=4)).isoformat(),
-            "pubblicato_il": "",
-        })
+        try:
+            append_product_row({
+                "titolo": titolo_finale,
+                "prezzo": str(prezzo_scontato).replace(".", ","),
+                "prezzo_originale": str(prezzo_pieno).replace(".", ","),
+                "sconto_percento": sconto_percento,
+                "link_affiliato": link_con_tag,
+                "immagine_url": immagine_url,
+                "ASIN": asin,
+                "fonte": "canale_terzo",
+                "stato": "NUOVO",
+                "aggiunto_il": now.isoformat(),
+                "scade_il": (now + timedelta(hours=4)).isoformat(),
+                "pubblicato_il": "",
+            })
+            answer_callback(callback_id, "Aggiunto!")
+            edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.")
+        except Exception as e:
+            answer_callback(callback_id, f"❌ Errore salvataggio: {str(e)[:50]}...")
+            edit_message(chat_id, message_id, f"❌ ERRORE nell'approvazione:\n{str(e)}")
 
         for campo in ["link", "testo", "prezzo_scontato", "prezzo_originale"]:
             set_state(f"pending_candidate_{campo}_{candidate_id}", "")
-
-        answer_callback(callback_id, "Aggiunto!")
-        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.")
 
     elif data.startswith("scarta_"):
         candidate_id = data[len("scarta_"):]
