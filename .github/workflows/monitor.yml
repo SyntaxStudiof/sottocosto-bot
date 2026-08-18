@@ -2,7 +2,7 @@ name: Monitora canali offerte
 
 on:
   schedule:
-    - cron: '*/20 * * * *'
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 jobs:
