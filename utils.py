@@ -1,24 +1,17 @@
-def extract_prices(text):
-    # Cerca pattern tipo: 12,99€ o 12.99€ o Prezzo: 15€
-    prices = re.findall(r'(\d+[.,]?\d*)\s?[€€]', text)
-    # Converti in float sostituendo virgola con punto
-    prices_float = []
-    for p in prices:
-        p_clean = p.replace(',', '.').replace(' ', '')
-        try:
-            prices_float.append(float(p_clean))
-        except:
-            continue
+import re
+
+def clean_title(raw_text):
+    # 1. Rimuovi tutti gli URL (http/https)
+    text = re.sub(r'https?://\S+', '', raw_text)
     
-    if not prices_float:
-        return None, None
+    # 2. Rimuovi i pattern di prezzo (es. 12,99€, 12.99 €, 120€, Prezzo: 15€)
+    text = re.sub(r'\b\d+[.,]?\d*\s?[€€€€€]\b', '', text)
+    text = re.sub(r'[Pp]rezzo\s*[:.]?\s*\d+[.,]?\d*\s?[€€]', '', text)
     
-    # Se trova almeno 2 prezzi, il più piccolo è scontato, il più grande è pieno
-    if len(prices_float) >= 2:
-        sconto = min(prices_float)
-        pieno = max(prices_float)
-    else:
-        sconto = prices_float[0]
-        pieno = None
+    # 3. Rimuovi parole inutili come "Offerta", "Sconto", "Amazon"
+    text = re.sub(r'\b(Offerta|Sconto|Amazon|Prime|Link|Acquista)\b', '', text, flags=re.IGNORECASE)
     
-    return sconto, pieno
+    # 4. Pulisci spazi multipli e ritorni a capo
+    text = ' '.join(text.split())
+    
+    return text.strip()
