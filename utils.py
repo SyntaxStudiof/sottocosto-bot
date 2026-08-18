@@ -18,12 +18,12 @@ def clean_title(raw_text):
     text = re.sub(r'#\w+', '', text)
     text = re.sub(r'[\(\)\[\]\{\}]', '', text)
     
-    # --- NUOVO: Rimuovi i disclaimer e le scritte del footer ---
+    # 3. Rimuovi disclaimer e footer sparsi
     text = re.sub(r'Disclaimer\s*[-–]\s*Condividi\s*su\s*WA', '', text, flags=re.IGNORECASE)
     text = re.sub(r'Condividi\s*su\s*WA', '', text, flags=re.IGNORECASE)
     text = re.sub(r'Disclaimer', '', text, flags=re.IGNORECASE)
     
-    # 3. Pulisci gli spazi
+    # 4. Pulisci gli spazi
     text = ' '.join(text.split())
     
     # --- FALLBACK ANTI-TITOLO VUOTO ---
@@ -41,7 +41,10 @@ def clean_title(raw_text):
         else:
             return "Prodotto Amazon (controlla anteprima)"
     
-    # --- MODIFICA LIMITE A 200 CARATTERI ---
+    # --- FIX: Rimuovi eventuali spazi, trattini o punteggiatura rimasti alla fine ---
+    text = re.sub(r'[-–_\s]+$', '', text.strip())
+    
+    # --- REGOLA DEI PUNTINI PER TITOLI LUNGHI (Max 200 caratteri) ---
     if len(text) > 200:
         return text[:197] + "..."
         
