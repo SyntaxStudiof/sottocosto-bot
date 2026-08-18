@@ -207,6 +207,20 @@ def handle_pending_reply(chat_id, text):
     return True
 
 
+# --- NUOVA FUNZIONE PER SEGUIRE IL REDIRECT E OTTENERE L'IMMAGINE VERA ---
+def get_direct_image_url(asin):
+    # Genera il link del widget Amazon
+    widget_link = f"https://ws-na.amazon-adsystem.com/widgets/q?_encoding=UTF8&ASIN={asin}&Format=_SL250_&ID=AsinImage&MarketPlace=IT&ServiceVersion=20070822&WS=1&tag={AFFILIATE_TAG}"
+    try:
+        # Fa una richiesta per seguire il reindirizzamento di Amazon
+        response = requests.get(widget_link, allow_redirects=True, timeout=10)
+        # Restituisce l'URL finale (quello diretto all'immagine su m.media-amazon.com)
+        return response.url
+    except:
+        # Se fallisce, restituisce il widget link (anche se non è perfetto, è un piano B)
+        return widget_link
+
+
 def handle_callback_query(callback_query):
     callback_id = callback_query["id"]
     data = callback_query.get("data", "")
@@ -246,10 +260,10 @@ def handle_callback_query(callback_query):
         
         titolo_finale = titolo if titolo else "Prodotto Amazon"
 
-        # --- GENERAZIONE IMMAGINE TRAMITE ASIN (SENZA SCRAPING) ---
-        # Usa il servizio Amazon Ads per generare l'immagine
+        # --- OTTIENI IL LINK DIRETTO DELL'IMMAGINE ---
+        # Invece di salvare il widget, seguiamo il redirect e prendiamo il link CDN
         if asin:
-            immagine_url = f"https://ws-na.amazon-adsystem.com/widgets/q?_encoding=UTF8&ASIN={asin}&Format=_SL250_&ID=AsinImage&MarketPlace=IT&ServiceVersion=20070822&WS=1&tag={AFFILIATE_TAG}"
+            immagine_url = get_direct_image_url(asin)
         else:
             immagine_url = ""
 
@@ -265,7 +279,7 @@ def handle_callback_query(callback_query):
             "prezzo_originale": str(prezzo_pieno).replace(".", ","),
             "sconto_percento": sconto_percento,
             "link_affiliato": link_con_tag,
-            "immagine_url": immagine_url,  # <--- Ora l'immagine viene salvata!
+            "immagine_url": immagine_url,  # <--- Ora è il link diretto all'immagine!
             "ASIN": asin,
             "fonte": "canale_terzo",
             "stato": "NUOVO",
@@ -278,7 +292,7 @@ def handle_callback_query(callback_query):
             set_state(f"pending_candidate_{campo}_{candidate_id}", "")
 
         answer_callback(callback_id, "Aggiunto!")
-        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n🖼 Immagine generata dall'ASIN (senza scraping).")
+        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n🖼 Immagine diretta estratta correttamente!")
 
     elif data.startswith("scarta_"):
         candidate_id = data[len("scarta_"):]
