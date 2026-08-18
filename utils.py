@@ -30,15 +30,15 @@ def clean_title(raw_text):
         fallback = ' '.join(fallback.split())
         
         if fallback.strip():
-            if len(fallback) > 100:
-                return fallback[:97] + "..."
+            if len(fallback) > 200:
+                return fallback[:197] + "..."
             return fallback.strip()
         else:
             return "Prodotto Amazon (controlla anteprima)"
     
-    # 4. Accorcia se troppo lungo
-    if len(text) > 100:
-        return text[:97] + "..."
+    # --- MODIFICA QUI: Aumentato il limite a 200 caratteri ---
+    if len(text) > 200:
+        return text[:197] + "..."
         
     return text.strip()
 
