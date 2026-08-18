@@ -207,20 +207,6 @@ def handle_pending_reply(chat_id, text):
     return True
 
 
-# --- NUOVA FUNZIONE PER SEGUIRE IL REDIRECT E OTTENERE L'IMMAGINE VERA ---
-def get_direct_image_url(asin):
-    # Genera il link del widget Amazon
-    widget_link = f"https://ws-na.amazon-adsystem.com/widgets/q?_encoding=UTF8&ASIN={asin}&Format=_SL250_&ID=AsinImage&MarketPlace=IT&ServiceVersion=20070822&WS=1&tag={AFFILIATE_TAG}"
-    try:
-        # Fa una richiesta per seguire il reindirizzamento di Amazon
-        response = requests.get(widget_link, allow_redirects=True, timeout=10)
-        # Restituisce l'URL finale (quello diretto all'immagine su m.media-amazon.com)
-        return response.url
-    except:
-        # Se fallisce, restituisce il widget link (anche se non è perfetto, è un piano B)
-        return widget_link
-
-
 def handle_callback_query(callback_query):
     callback_id = callback_query["id"]
     data = callback_query.get("data", "")
@@ -255,17 +241,18 @@ def handle_callback_query(callback_query):
         if prezzo_pieno is None:
             prezzo_pieno = prezzo_scontato
 
-        asin, _, final_url = resolve_and_extract_asin(link)
-        link_con_tag = add_affiliate_tag(final_url)
+        # --- SOLUZIONE FINALE PER L'IMMAGINE ---
+        # 1. Scarica ASIN e HTML della pagina (nessuna richiesta extra!)
+        asin, html_page, final_url = resolve_and_extract_asin(link)
+        # 2. Estrai l'immagine direttamente dall'HTML già scaricato, senza fare scraping aggiuntivo!
+        immagine_url = extract_image(html_page)
         
-        titolo_finale = titolo if titolo else "Prodotto Amazon"
+        # Fallback di sicurezza: se non trova l'immagine, usa il widget.
+        if not immagine_url and asin:
+            immagine_url = f"https://ws-na.amazon-adsystem.com/widgets/q?_encoding=UTF8&ASIN={asin}&Format=_SL250_&ID=AsinImage&MarketPlace=IT&ServiceVersion=20070822&WS=1&tag={AFFILIATE_TAG}"
 
-        # --- OTTIENI IL LINK DIRETTO DELL'IMMAGINE ---
-        # Invece di salvare il widget, seguiamo il redirect e prendiamo il link CDN
-        if asin:
-            immagine_url = get_direct_image_url(asin)
-        else:
-            immagine_url = ""
+        link_con_tag = add_affiliate_tag(final_url)
+        titolo_finale = titolo if titolo else "Prodotto Amazon"
 
         sconto_percento = 0
         if prezzo_pieno > 0:
@@ -279,7 +266,7 @@ def handle_callback_query(callback_query):
             "prezzo_originale": str(prezzo_pieno).replace(".", ","),
             "sconto_percento": sconto_percento,
             "link_affiliato": link_con_tag,
-            "immagine_url": immagine_url,  # <--- Ora è il link diretto all'immagine!
+            "immagine_url": immagine_url,  # <--- Ora è il link diretto (m.media-amazon)!
             "ASIN": asin,
             "fonte": "canale_terzo",
             "stato": "NUOVO",
@@ -292,7 +279,7 @@ def handle_callback_query(callback_query):
             set_state(f"pending_candidate_{campo}_{candidate_id}", "")
 
         answer_callback(callback_id, "Aggiunto!")
-        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n🖼 Immagine diretta estratta correttamente!")
+        edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n🖼 Immagine estratta correttamente dall'HTML!")
 
     elif data.startswith("scarta_"):
         candidate_id = data[len("scarta_"):]
