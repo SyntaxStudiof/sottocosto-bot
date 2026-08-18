@@ -73,33 +73,47 @@ def process_channel(client, channel_username):
             max_id_seen = message.id
 
         text = message.text or ""
-        
-        # Dividiamo il messaggio in più offerte (se il messaggio ne contiene più di una)
         text_parts = split_multiple_offers(text)
         
         for single_offer_text in text_parts:
-
             product_link = find_product_link(single_offer_text)
             if not product_link:
                 continue
 
-            # Estraiamo i prezzi solo da questa singola offerta
-            prezzi = PRICE_RE.findall(single_offer_text) 
+            # --- NUOVA LOGICA PER I PREZZI ---
+            # Cerca prima il prezzo in offerta e quello consigliato leggendo le etichette nel testo
+            prezzi_scontati = re.findall(r'[Pp]rezzo\s*in\s*offerta\s*[:.]?\s*(\d+[.,]\d{2})', single_offer_text)
+            prezzi_originali = re.findall(r'[Pp]rezzo\s*consigliato\s*[:.]?\s*(\d+[.,]\d{2})', single_offer_text)
 
-            # Puliamo il titolo solo da questa singola offerta
+            prezzo_scontato = None
+            prezzo_originale = None
+
+            if prezzi_scontati:
+                prezzo_scontato = prezzi_scontati[0]
+            else:
+                # Fallback: Se non trova la scritta "in offerta", prende il numero più basso trovato
+                all_prices = PRICE_RE.findall(single_offer_text)
+                if all_prices:
+                    # Converte in float per capire il più piccolo (per lo sconto) e il più grande (per l'originale)
+                    float_prices = sorted([float(p.replace(',', '.')) for p in all_prices])
+                    prezzo_scontato = str(float_prices[0]).replace('.', ',')
+                    if len(float_prices) > 1:
+                        prezzo_originale = str(float_prices[-1]).replace('.', ',')
+
+            if prezzi_originali:
+                prezzo_originale = prezzi_originali[0]
+
             title_cleaned = clean_title(single_offer_text)
-
-            # Uso un piccolo trucco per rendere l'ID univoco e senza caratteri strani
-            # che potrebbero rompere i pulsanti di approvazione
             candidate_id = f"{channel_username}_{message.id}_{abs(hash(single_offer_text))}"
             
-            # Salviamo nei dati del foglio Google
+            # Salviamo i prezzi separatamente in due campi distinti
             set_state(f"pending_candidate_link_{candidate_id}", product_link)
             set_state(f"pending_candidate_testo_{candidate_id}", title_cleaned)  
-            set_state(f"pending_candidate_prezzi_{candidate_id}", ",".join(prezzi))
+            set_state(f"pending_candidate_prezzo_scontato_{candidate_id}", prezzo_scontato)
+            set_state(f"pending_candidate_prezzo_originale_{candidate_id}", prezzo_originale)
 
-            # Mandiamo l'anteprima al proprietario
-            send_proposal(candidate_id, title_cleaned, product_link, prezzi)
+            # Inviamo l'anteprima (passiamo entrambi i prezzi, anche se manca uno dei due)
+            send_proposal(candidate_id, title_cleaned, product_link, prezzo_scontato, prezzo_originale)
 
     if max_id_seen > last_id:
         set_state(last_id_key, str(max_id_seen))
