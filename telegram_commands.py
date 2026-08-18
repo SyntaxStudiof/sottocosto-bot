@@ -216,33 +216,46 @@ def handle_callback_query(callback_query):
     if data.startswith("approva_"):
         candidate_id = data[len("approva_"):]
         link = get_state(f"pending_candidate_link_{candidate_id}", "")
-        prezzi_str = get_state(f"pending_candidate_prezzi_{candidate_id}", "")
+        titolo = get_state(f"pending_candidate_testo_{candidate_id}", "")
+        prezzo_scontato_str = get_state(f"pending_candidate_prezzo_scontato_{candidate_id}", "")
+        prezzo_pieno_str = get_state(f"pending_candidate_prezzo_originale_{candidate_id}", "")
 
         if not link:
             answer_callback(callback_id, "Candidato non trovato o già gestito.")
             return
 
-        prezzi = [float(p.replace(",", ".")) for p in prezzi_str.split(",") if p]
-
-        if len(prezzi) >= 2:
-            prezzo_scontato = min(prezzi)
-            prezzo_pieno = max(prezzi)
-        elif len(prezzi) == 1:
-            prezzo_scontato = prezzi[0]
-            prezzo_pieno = prezzi[0]
-        else:
-            answer_callback(callback_id, "Prezzi mancanti, approvazione annullata.")
+        # Converte i prezzi da stringa a numero decimale
+        prezzo_scontato = None
+        prezzo_pieno = None
+        try:
+            if prezzo_scontato_str:
+                prezzo_scontato = float(prezzo_scontato_str.replace(",", "."))
+            if prezzo_pieno_str:
+                prezzo_pieno = float(prezzo_pieno_str.replace(",", "."))
+        except ValueError:
+            answer_callback(callback_id, "Errore nel formato dei prezzi.")
             return
+
+        # Controlli per evitare errori
+        if prezzo_scontato is None:
+            answer_callback(callback_id, "Prezzo scontato mancante, approvazione annullata.")
+            return
+        if prezzo_pieno is None:
+            prezzo_pieno = prezzo_scontato  # Se manca il prezzo pieno, usiamo lo scontato
 
         asin, _, final_url = resolve_and_extract_asin(link)
         link_con_tag = add_affiliate_tag(final_url)
-        titolo = get_state(f"pending_candidate_testo_{candidate_id}", "")[:150]
+        
+        titolo_finale = titolo if titolo else "Prodotto Amazon"
 
-        sconto_percento = round((1 - prezzo_scontato / prezzo_pieno) * 100) if prezzo_pieno else 0
+        sconto_percento = 0
+        if prezzo_pieno > 0:
+            sconto_percento = round((1 - prezzo_scontato / prezzo_pieno) * 100)
+        
         now = datetime.now(timezone.utc)
 
         append_product_row({
-            "titolo": titolo,
+            "titolo": titolo_finale,
             "prezzo": str(prezzo_scontato).replace(".", ","),
             "prezzo_originale": str(prezzo_pieno).replace(".", ","),
             "sconto_percento": sconto_percento,
@@ -256,9 +269,17 @@ def handle_callback_query(callback_query):
             "pubblicato_il": "",
         })
 
+        # Pulisce i dati temporanei
+        for campo in ["link", "testo", "prezzo_scontato", "prezzo_originale"]:
+            set_state(f"pending_candidate_{campo}_{candidate_id}", "")
+
         answer_callback(callback_id, "Aggiunto!")
         edit_message(chat_id, message_id, "✅ Approvato e aggiunto alla coda.\n\n⚠️ Ricorda di aggiungere l'immagine a mano sul foglio.")
 
     elif data.startswith("scarta_"):
+        candidate_id = data[len("scarta_"):]
+        # Pulisce i dati temporanei anche quando scarti
+        for campo in ["link", "testo", "prezzo_scontato", "prezzo_originale"]:
+            set_state(f"pending_candidate_{campo}_{candidate_id}", "")
         answer_callback(callback_id, "Scartato.")
         edit_message(chat_id, message_id, "❌ Scartato.")
