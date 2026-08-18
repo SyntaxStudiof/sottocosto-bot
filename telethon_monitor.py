@@ -44,18 +44,21 @@ def find_product_link(text):
     return None
 
 
-def send_proposal(candidate_id, testo_originale, link, prezzi):
+def send_proposal(candidate_id, testo_originale, link, prezzo_scontato, prezzo_originale):
     keyboard = {
         "inline_keyboard": [[
             {"text": "✅ Approva", "callback_data": f"approva_{candidate_id}"},
             {"text": "❌ Scarta", "callback_data": f"scarta_{candidate_id}"},
         ]]
     }
-    testo = (
-        f"🆕 Offerta trovata:\n\n{testo_originale[:400]}\n\n"
-        f"🔗 {link}\n"
-        f"💰 Prezzi trovati: {', '.join(prezzi) if prezzi else 'nessuno, controlla a mano'}"
-    )
+    # Costruisci il testo del messaggio di anteprima con i prezzi ben separati
+    testo = f"🆕 Offerta trovata:\n\n{testo_originale[:400]}\n\n"
+    testo += f"🔗 {link}\n"
+    if prezzo_scontato:
+        testo += f"💰 Prezzo scontato: {prezzo_scontato}€\n"
+    if prezzo_originale:
+        testo += f"💰 Prezzo originale: {prezzo_originale}€\n"
+    
     requests.post(f"{BOT_API_URL}/sendMessage", data={
         "chat_id": OWNER_CHAT_ID,
         "text": testo,
