@@ -1,22 +1,52 @@
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import gspread
+from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
 CREDS_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
-# --- CACHE DELL'INTESTAZIONE (per evitare errori 429) ---
+# --- CACHE DELL'INTESTAZIONE E DEL CLIENT (per evitare errori 429) ---
 _HEADER_CACHE = None
+_CLIENT_CACHE = None
+
+
+def _get_client():
+    global _CLIENT_CACHE
+    if _CLIENT_CACHE is None:
+        creds_dict = json.loads(CREDS_JSON)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        _CLIENT_CACHE = gspread.authorize(creds)
+    return _CLIENT_CACHE
+
+
+def _with_retry(fn, *args, retries=4, **kwargs):
+    """Ritenta le chiamate all'API di Google in caso di 429 (quota superata),
+    con backoff esponenziale. Rilancia l'errore se non è un problema di quota
+    o se i tentativi sono esauriti."""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except APIError as e:
+            last_err = e
+            msg = str(e)
+            if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "Quota exceeded" in msg:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+    raise last_err
+
 
 def _get_worksheet():
-    creds_dict = json.loads(CREDS_JSON)
-    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    client = gspread.authorize(creds)
-    return client.open_by_key(SHEET_ID).worksheet("Foglio1")
+    client = _get_client()
+    spreadsheet = _with_retry(client.open_by_key, SHEET_ID)
+    return spreadsheet.worksheet("Foglio1")
 
 
 def _get_header():
@@ -24,14 +54,14 @@ def _get_header():
     global _HEADER_CACHE
     if _HEADER_CACHE is None:
         ws = _get_worksheet()
-        _HEADER_CACHE = ws.row_values(1)
+        _HEADER_CACHE = _with_retry(ws.row_values, 1)
     return _HEADER_CACHE
 
 
 def get_all_rows():
     """Ritorna lista di dict, ognuno con anche il numero di riga reale nel foglio."""
     ws = _get_worksheet()
-    records = ws.get_all_records(numericise_ignore=['all'])
+    records = _with_retry(ws.get_all_records, numericise_ignore=['all'])
     rows = []
     for i, r in enumerate(records, start=2):  # riga 1 = header
         r["_row_number"] = i
@@ -41,26 +71,23 @@ def get_all_rows():
 
 def mark_row(ws, row_number, stato, extra_updates=None):
     """Aggiorna la colonna stato (e opzionalmente altre) per una riga."""
-    header = ws.row_values(1)
+    header = _with_retry(ws.row_values, 1)
     updates = {"stato": stato}
     if extra_updates:
         updates.update(extra_updates)
     for col_name, value in updates.items():
         if col_name in header:
             col_index = header.index(col_name) + 1
-            ws.update_cell(row_number, col_index, value)
+            _with_retry(ws.update_cell, row_number, col_index, value)
 
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def _get_config_worksheet(client=None):
-    if client is None:
-        creds_dict = json.loads(CREDS_JSON)
-        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-        client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID)
+def _get_config_worksheet():
+    client = _get_client()
+    sheet = _with_retry(client.open_by_key, SHEET_ID)
     try:
         return sheet.worksheet("Config")
     except gspread.WorksheetNotFound:
@@ -71,7 +98,7 @@ def _get_config_worksheet(client=None):
 
 def get_state(key, default=""):
     ws = _get_config_worksheet()
-    values = ws.get_all_records(numericise_ignore=['all'])
+    values = _with_retry(ws.get_all_records, numericise_ignore=['all'])
     for row in values:
         if row.get("chiave") == key:
             return str(row.get("valore", default))
@@ -81,11 +108,27 @@ def get_state(key, default=""):
 def set_state(key, value):
     ws = _get_config_worksheet()
     value_str = str(value)
-    cell = ws.find(key)
+    cell = _with_retry(ws.find, key)
     if cell:
-        ws.update(f"B{cell.row}", [[value_str]], value_input_option='RAW')
+        _with_retry(ws.update, f"B{cell.row}", [[value_str]], value_input_option='RAW')
     else:
-        ws.append_row([key, value_str], value_input_option='RAW')
+        _with_retry(ws.append_row, [key, value_str], value_input_option='RAW')
+
+
+def get_state_json(key, default=None):
+    """Legge una chiave e la interpreta come JSON. Ritorna {} (o default) se assente/non valida."""
+    raw = get_state(key, "")
+    if not raw:
+        return default if default is not None else {}
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return default if default is not None else {}
+
+
+def set_state_json(key, data):
+    """Scrive un dict come singola cella JSON, invece di una riga per campo."""
+    set_state(key, json.dumps(data, ensure_ascii=False))
 
 
 def append_product_row(product_dict):
@@ -93,4 +136,4 @@ def append_product_row(product_dict):
     ws = _get_worksheet()
     header = _get_header()  # <--- Usa l'header in cache, evitando il 429!
     row = [product_dict.get(col, "") for col in header]
-    ws.append_row(row)
+    _with_retry(ws.append_row, row)
