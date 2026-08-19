@@ -195,13 +195,16 @@ def finalize(chat_id):
             "immagine_url": immagine,
             "ASIN": asin,
             "fonte": "manuale",
-            "stato": "NUOVO",
+            # Il prodotto è inserito manualmente da Francesco stesso tramite /aggiungi:
+            # non serve un'approvazione ulteriore, quindi entra già come APPROVATO
+            # così pubblica.yml lo trova subito.
+            "stato": "APPROVATO",
             "aggiunto_il": now.isoformat(),
             "scade_il": (now + timedelta(hours=4)).isoformat(),
             "pubblicato_il": "",
         })
 
-        success_text = f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%"
+        success_text = f"✅ Aggiunto e approvato: {titolo}\nSconto: {sconto_percento}%"
         if loading_msg_id:
             edit_message(chat_id, loading_msg_id, success_text)
         else:
@@ -343,7 +346,9 @@ def handle_callback_query(callback_query):
                 "immagine_url": immagine_url,
                 "ASIN": asin,
                 "fonte": "canale_terzo",
-                "stato": "NUOVO",
+                # Il tap su "Approva" È l'approvazione: deve entrare già
+                # come APPROVATO, non NUOVO, altrimenti pubblica.yml lo ignora.
+                "stato": "APPROVATO",
                 "aggiunto_il": now.isoformat(),
                 "scade_il": (now + timedelta(hours=4)).isoformat(),
                 "pubblicato_il": "",
