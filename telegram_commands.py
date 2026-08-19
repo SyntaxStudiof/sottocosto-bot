@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
-from sheet_client import get_state, set_state, append_product_row
+from sheet_client import get_state, set_state, get_state_json, set_state_json, append_product_row
 
 API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
@@ -37,14 +37,14 @@ def add_affiliate_tag(url):
 
 
 def send_message(chat_id, text):
-    requests.post(f"{API_URL}/sendMessage", data={"chat_id": chat_id, "text": text})
+    return requests.post(f"{API_URL}/sendMessage", data={"chat_id": chat_id, "text": text}, timeout=15)
 
 
 def answer_callback(callback_id, text=""):
     requests.post(f"{API_URL}/answerCallbackQuery", data={
         "callback_query_id": callback_id,
         "text": text,
-    })
+    }, timeout=15)
 
 
 def edit_message(chat_id, message_id, text):
@@ -52,7 +52,7 @@ def edit_message(chat_id, message_id, text):
         "chat_id": chat_id,
         "message_id": message_id,
         "text": text,
-    })
+    }, timeout=15)
 
 
 def resolve_and_extract_asin(link):
@@ -65,7 +65,7 @@ def resolve_and_extract_asin(link):
 
 def extract_title(html):
     soup = BeautifulSoup(html, 'html.parser')
-    
+
     if soup.find('form', {'action': '/errors/validateCaptcha'}):
         return ""
 
@@ -75,43 +75,43 @@ def extract_title(html):
         titolo = h1_tag.get_text(strip=True)
         titolo = re.sub(r'\s*[–|-]\s*Amazon\.(it|com|co\.uk)$', '', titolo, flags=re.IGNORECASE)
         return titolo.strip()
-    
+
     og_title = soup.find('meta', property='og:title')
     if og_title and og_title.get('content'):
         titolo = og_title['content']
         titolo = re.sub(r'\s*[–|-]\s*Amazon\.(it|com|co\.uk)$', '', titolo, flags=re.IGNORECASE)
         return titolo.strip()
-    
+
     tw_title = soup.find('meta', attrs={'name': 'twitter:title'})
     if tw_title and tw_title.get('content'):
         titolo = tw_title['content']
         titolo = re.sub(r'\s*[–|-]\s*Amazon\.(it|com|co\.uk)$', '', titolo, flags=re.IGNORECASE)
         return titolo.strip()
-    
+
     title_tag = soup.find('title')
     if title_tag:
         titolo = title_tag.get_text(strip=True)
         titolo = re.sub(r'\s*:\s*Amazon\.it$', '', titolo, flags=re.IGNORECASE)
         titolo = re.sub(r'\s*[–|-]\s*Amazon\.(it|com|co\.uk)$', '', titolo, flags=re.IGNORECASE)
         return titolo.strip()
-        
+
     return ""
 
 
 def extract_image(html):
     soup = BeautifulSoup(html, 'html.parser')
-    
+
     if soup.find('form', {'action': '/errors/validateCaptcha'}):
         return ""
 
     main_img = soup.find('img', id='landingImage')
     if main_img and main_img.get('src'):
         return main_img['src']
-    
+
     old_hires = soup.find('img', attrs={'data-old-hires': True})
     if old_hires and old_hires.get('data-old-hires'):
         return old_hires['data-old-hires']
-    
+
     dynamic_img = soup.find('img', attrs={'data-a-dynamic-image': True})
     if dynamic_img:
         raw = dynamic_img['data-a-dynamic-image']
@@ -119,67 +119,73 @@ def extract_image(html):
             data = json.loads(html_module.unescape(raw))
             if data:
                 return list(data.keys())[0]
-        except:
+        except Exception:
             pass
-            
+
     og_image = soup.find('meta', property='og:image')
     if og_image and og_image.get('content'):
         return og_image['content']
-    
+
     tw_image = soup.find('meta', attrs={'name': 'twitter:image'})
     if tw_image and tw_image.get('content'):
         return tw_image['content']
-        
+
     return ""
 
 
+# --- STATO PENDING PER /aggiungi ---
+# Prima: 7 righe separate per ogni chat_id nel foglio Config (pending_link_X,
+# pending_titolo_X, ecc.), ognuna letta/scritta con una chiamata API a parte.
+# Ora: un solo blob JSON per chat_id -> molte meno chiamate a Google Sheets,
+# quindi molto meno rischio di 429 e di righe duplicate se qualcosa fallisce.
+
+def _pending_key(chat_id):
+    return f"pending_{chat_id}"
+
+
 def ask_next(chat_id):
-    queue_str = get_state(f"pending_queue_{chat_id}", "")
-    if not queue_str:
+    state = get_state_json(_pending_key(chat_id))
+    queue = state.get("queue", [])
+    if not queue:
         finalize(chat_id)
         return
-    queue = queue_str.split(",")
     next_field = queue[0]
     send_message(chat_id, PROMPTS[next_field])
 
 
-# --- FUNZIONE FINALIZE RISCRITTA CON GESTIONE TIMEOUT ---
 def finalize(chat_id):
-    link = get_state(f"pending_link_{chat_id}", "")
-    titolo = get_state(f"pending_titolo_{chat_id}", "")
-    immagine = get_state(f"pending_immagine_{chat_id}", "")
-    asin = get_state(f"pending_asin_{chat_id}", "")
-    prezzo_scontato = get_state(f"pending_prezzo_scontato_{chat_id}", "")
-    prezzo_pieno = get_state(f"pending_prezzo_pieno_{chat_id}", "")
+    state = get_state_json(_pending_key(chat_id))
+    link = state.get("link", "")
+    titolo = state.get("titolo", "")
+    immagine = state.get("immagine", "")
+    asin = state.get("asin", "")
+    prezzo_scontato = state.get("prezzo_scontato", "")
+    prezzo_pieno = state.get("prezzo_pieno", "")
 
     # --- FASE 1: Controllo prezzi ---
     try:
-        prezzo_scontato_f = float(prezzo_scontato.replace(",", "."))
-        prezzo_pieno_f = float(prezzo_pieno.replace(",", "."))
+        prezzo_scontato_f = float(str(prezzo_scontato).replace(",", "."))
+        prezzo_pieno_f = float(str(prezzo_pieno).replace(",", "."))
     except ValueError:
         send_message(chat_id, "❌ Errore nei prezzi salvati. Riprova da capo con /aggiungi.")
-        for campo in ["queue", "link", "titolo", "immagine", "asin", "prezzo_scontato", "prezzo_pieno"]:
-            set_state(f"pending_{campo}_{chat_id}", "")
+        set_state(_pending_key(chat_id), "")
         return
 
     # --- FASE 2: Risposta IMMEDIATA per evitare timeout di Telegram ---
-    # Il bot risponde subito con un messaggio di attesa, così Telegram non chiude la connessione
     loading_msg = send_message(chat_id, "⏳ Salvataggio su Google Sheets in corso... attendi qualche secondo.")
-    
-    # Se send_message fallisce, loading_msg è None. Gestiamo il caso.
+
     loading_msg_id = None
-    if loading_msg and loading_msg.status_code == 200:
+    if loading_msg is not None and loading_msg.status_code == 200:
         try:
             loading_msg_id = loading_msg.json()["result"]["message_id"]
-        except:
+        except Exception:
             pass
 
-    # --- FASE 3: Salvataggio su Google Sheets (con massima gestione errori) ---
+    # --- FASE 3: Salvataggio su Google Sheets ---
     try:
         sconto_percento = round((1 - prezzo_scontato_f / prezzo_pieno_f) * 100)
         now = datetime.now(timezone.utc)
 
-        # Prova a salvare su Google
         append_product_row({
             "titolo": titolo,
             "prezzo": str(prezzo_scontato_f).replace(".", ","),
@@ -195,25 +201,22 @@ def finalize(chat_id):
             "pubblicato_il": "",
         })
 
-        # Se il salvataggio è riuscito, modifichiamo il messaggio di caricamento con la conferma
         success_text = f"✅ Aggiunto: {titolo}\nSconto: {sconto_percento}%"
         if loading_msg_id:
             edit_message(chat_id, loading_msg_id, success_text)
         else:
             send_message(chat_id, success_text)
-        
+
     except Exception as e:
-        # Se c'è un errore, modifichiamo il messaggio di caricamento con l'errore
         error_text = f"❌ ERRORE nel salvataggio su Google Sheets:\n\n{str(e)}\n\nControlla le colonne del foglio."
         if loading_msg_id:
             edit_message(chat_id, loading_msg_id, error_text)
         else:
             send_message(chat_id, error_text)
-            
+
     finally:
-        # Pulisce lo stato
-        for campo in ["queue", "link", "titolo", "immagine", "asin", "prezzo_scontato", "prezzo_pieno"]:
-            set_state(f"pending_{campo}_{chat_id}", "")
+        # Pulisce lo stato: ora è una sola chiave invece di 7
+        set_state(_pending_key(chat_id), "")
 
 
 def handle_aggiungi(chat_id, args):
@@ -235,13 +238,16 @@ def handle_aggiungi(chat_id, args):
     queue.append("prezzo_scontato")
     queue.append("prezzo_pieno")
 
-    set_state(f"pending_link_{chat_id}", link_con_tag)
-    set_state(f"pending_titolo_{chat_id}", titolo)
-    set_state(f"pending_immagine_{chat_id}", immagine)
-    set_state(f"pending_asin_{chat_id}", asin)
-    set_state(f"pending_prezzo_scontato_{chat_id}", "")
-    set_state(f"pending_prezzo_pieno_{chat_id}", "")
-    set_state(f"pending_queue_{chat_id}", ",".join(queue))
+    state = {
+        "link": link_con_tag,
+        "titolo": titolo,
+        "immagine": immagine,
+        "asin": asin,
+        "prezzo_scontato": "",
+        "prezzo_pieno": "",
+        "queue": queue,
+    }
+    set_state_json(_pending_key(chat_id), state)
 
     trovati = []
     if titolo:
@@ -255,11 +261,11 @@ def handle_aggiungi(chat_id, args):
 
 
 def handle_pending_reply(chat_id, text):
-    queue_str = get_state(f"pending_queue_{chat_id}", "")
-    if not queue_str:
+    state = get_state_json(_pending_key(chat_id))
+    queue = state.get("queue", [])
+    if not queue:
         return False
 
-    queue = queue_str.split(",")
     current_field = queue[0]
     value = text.strip()
 
@@ -270,12 +276,11 @@ def handle_pending_reply(chat_id, text):
             send_message(chat_id, "Deve essere un numero, es: 23.14. Riprova:")
             return True
 
-    set_state(f"pending_{current_field}_{chat_id}", value)
+    state[current_field] = value
+    state["queue"] = queue[1:]
+    set_state_json(_pending_key(chat_id), state)
 
-    remaining = queue[1:]
-    set_state(f"pending_queue_{chat_id}", ",".join(remaining))
-
-    if remaining:
+    if state["queue"]:
         ask_next(chat_id)
     else:
         finalize(chat_id)
@@ -325,7 +330,7 @@ def handle_callback_query(callback_query):
         sconto_percento = 0
         if prezzo_pieno > 0:
             sconto_percento = round((1 - prezzo_scontato / prezzo_pieno) * 100)
-        
+
         now = datetime.now(timezone.utc)
 
         try:
