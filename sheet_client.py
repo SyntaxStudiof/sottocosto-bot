@@ -115,6 +115,14 @@ def set_state(key, value):
         _with_retry(ws.append_row, [key, value_str], value_input_option='RAW')
 
 
+def delete_state(key):
+    """Cancella davvero la riga della chiave, invece di lasciarla con valore vuoto."""
+    ws = _get_config_worksheet()
+    cell = _with_retry(ws.find, key)
+    if cell:
+        _with_retry(ws.delete_rows, cell.row)
+
+
 def get_state_json(key, default=None):
     """Legge una chiave e la interpreta come JSON. Ritorna {} (o default) se assente/non valida."""
     raw = get_state(key, "")
