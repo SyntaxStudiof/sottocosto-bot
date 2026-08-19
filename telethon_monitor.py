@@ -24,6 +24,7 @@ CHANNELS = [
     "RisparmioGaming",
     "passioneapple",
     "RisparmiareSulWeb",
+    "occasionissimaoffertesconti",
 ]
 
 AMAZON_URL_RE = re.compile(r'https?://(?:www\.)?(?:amazon\.[a-z.]+|amzn\.to|amzn\.eu)/\S+')
