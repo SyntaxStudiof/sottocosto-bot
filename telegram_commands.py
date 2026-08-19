@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
-from sheet_client import get_state, set_state, get_state_json, set_state_json, append_product_row
+from sheet_client import get_state, set_state, delete_state, get_state_json, set_state_json, append_product_row
 
 API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
@@ -168,7 +168,7 @@ def finalize(chat_id):
         prezzo_pieno_f = float(str(prezzo_pieno).replace(",", "."))
     except ValueError:
         send_message(chat_id, "❌ Errore nei prezzi salvati. Riprova da capo con /aggiungi.")
-        set_state(_pending_key(chat_id), "")
+        delete_state(_pending_key(chat_id))
         return
 
     # --- FASE 2: Risposta IMMEDIATA per evitare timeout di Telegram ---
@@ -216,7 +216,7 @@ def finalize(chat_id):
 
     finally:
         # Pulisce lo stato: ora è una sola chiave invece di 7
-        set_state(_pending_key(chat_id), "")
+        delete_state(_pending_key(chat_id))
 
 
 def handle_aggiungi(chat_id, args):
@@ -355,11 +355,11 @@ def handle_callback_query(callback_query):
             edit_message(chat_id, message_id, f"❌ ERRORE nell'approvazione:\n{str(e)}")
 
         for campo in ["link", "testo", "prezzo_scontato", "prezzo_originale"]:
-            set_state(f"pending_candidate_{campo}_{candidate_id}", "")
+            delete_state(f"pending_candidate_{campo}_{candidate_id}")
 
     elif data.startswith("scarta_"):
         candidate_id = data[len("scarta_"):]
         for campo in ["link", "testo", "prezzo_scontato", "prezzo_originale"]:
-            set_state(f"pending_candidate_{campo}_{candidate_id}", "")
+            delete_state(f"pending_candidate_{campo}_{candidate_id}")
         answer_callback(callback_id, "Scartato.")
         edit_message(chat_id, message_id, "❌ Scartato.")
