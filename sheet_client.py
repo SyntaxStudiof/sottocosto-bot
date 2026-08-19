@@ -9,15 +9,23 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
 CREDS_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
+# --- CACHE DELL'INTESTAZIONE (per evitare errori 429) ---
+_HEADER_CACHE = None
 
 def _get_worksheet():
     creds_dict = json.loads(CREDS_JSON)
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     client = gspread.authorize(creds)
-    # --- CORREZIONE FONDAMENTALE ---
-    # Invece di usare .sheet1 (che prende il PRIMO foglio in ordine),
-    # usiamo .worksheet("Foglio1") per indirizzare esattamente il tab corretto.
     return client.open_by_key(SHEET_ID).worksheet("Foglio1")
+
+
+def _get_header():
+    """Legge l'intestazione una volta sola e la mette in cache."""
+    global _HEADER_CACHE
+    if _HEADER_CACHE is None:
+        ws = _get_worksheet()
+        _HEADER_CACHE = ws.row_values(1)
+    return _HEADER_CACHE
 
 
 def get_all_rows():
@@ -83,6 +91,6 @@ def set_state(key, value):
 def append_product_row(product_dict):
     """Aggiunge una nuova riga prodotto in coda, rispettando l'ordine delle colonne del foglio principale."""
     ws = _get_worksheet()
-    header = ws.row_values(1)
+    header = _get_header()  # <--- Usa l'header in cache, evitando il 429!
     row = [product_dict.get(col, "") for col in header]
     ws.append_row(row)
