@@ -22,13 +22,30 @@ def _is_valid(row):
     return True
 
 
+def _data_aggiunta(row):
+    """Legge la colonna 'aggiunto_il' e la trasforma in una data leggibile
+    da Python, così possiamo ordinare i prodotti dal più vecchio al più nuovo.
+    Se la data manca o è scritta male, la mettiamo in fondo alla lista
+    (così non blocca la pubblicazione degli altri prodotti)."""
+    valore = row.get("aggiunto_il", "").strip()
+    if not valore:
+        return datetime.max.replace(tzinfo=timezone.utc)
+    try:
+        data = datetime.fromisoformat(valore)
+        if data.tzinfo is None:
+            data = data.replace(tzinfo=timezone.utc)
+        return data
+    except ValueError:
+        return datetime.max.replace(tzinfo=timezone.utc)
+
+
 def pick_next_product(min_discount=MIN_DISCOUNT_PERCENT):
     rows, ws = get_all_rows()
     candidates = []
     for row in rows:
         if not row.get("titolo"):
             continue
-            
+
         # --- CONTROLLO FONDAMENTALE: Salta le offerte senza immagine ---
         if not row.get("immagine_url", "").strip():
             continue
@@ -37,18 +54,21 @@ def pick_next_product(min_discount=MIN_DISCOUNT_PERCENT):
             sconto = int(row.get("sconto_percento", 0))
         except ValueError:
             sconto = 0
-            
+
         if sconto < min_discount:
             continue
         if not _is_valid(row):
             continue
-            
+
         candidates.append(row)
 
     if not candidates:
         return None, None
 
-    chosen = random.choice(candidates)
+    # --- SCELTA DEL PRODOTTO: il più vecchio (aggiunto_il) va pubblicato per primo ---
+    candidates.sort(key=_data_aggiunta)
+    chosen = candidates[0]
+
     product = {
         "title": chosen.get("titolo", "").strip(),
         "price": float(str(chosen.get("prezzo", 0)).replace(",", ".")),
