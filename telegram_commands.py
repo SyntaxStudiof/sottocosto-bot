@@ -200,7 +200,7 @@ def finalize(chat_id):
             # così pubblica.yml lo trova subito.
             "stato": "APPROVATO",
             "aggiunto_il": now.isoformat(),
-            "scade_il": (now + timedelta(hours=4)).isoformat(),
+            "scade_il": (now + timedelta(hours=6)).isoformat(),
             "pubblicato_il": "",
         })
 
@@ -350,7 +350,7 @@ def handle_callback_query(callback_query):
                 # come APPROVATO, non NUOVO, altrimenti pubblica.yml lo ignora.
                 "stato": "APPROVATO",
                 "aggiunto_il": now.isoformat(),
-                "scade_il": (now + timedelta(hours=4)).isoformat(),
+                "scade_il": (now + timedelta(hours=6)).isoformat(),
                 "pubblicato_il": "",
             })
             answer_callback(callback_id, "Aggiunto!")
