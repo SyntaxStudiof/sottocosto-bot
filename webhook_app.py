@@ -1,4 +1,5 @@
 import os
+import asyncio
 import traceback
 
 import requests
@@ -6,6 +7,7 @@ from flask import Flask, request
 
 from config import TELEGRAM_BOT_TOKEN
 from telegram_commands import handle_aggiungi, handle_pending_reply, handle_callback_query
+from main import pubblica_prodotto
 
 app = Flask(__name__)
 
@@ -58,6 +60,16 @@ def webhook():
 
 @app.route("/")
 def health():
+    # UptimeRobot pinga questo indirizzo ogni 5 minuti per tenere sveglio Render.
+    # Ne approfittiamo per controllare se è ora di pubblicare il prossimo prodotto:
+    # niente più dipendenza dal cron di GitHub Actions, che si è dimostrato inaffidabile.
+    try:
+        asyncio.run(pubblica_prodotto())
+    except Exception:
+        err = traceback.format_exc()
+        print(err)
+        _notify_owner_error(err)
+
     return "Bot attivo", 200
 
 
