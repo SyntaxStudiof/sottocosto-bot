@@ -6,3 +6,4 @@ flask
 gunicorn
 telethon
 beautifulsoup4
+tzdata
