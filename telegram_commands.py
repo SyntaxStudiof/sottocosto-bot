@@ -36,6 +36,15 @@ def add_affiliate_tag(url):
     return url
 
 
+def _immagine_alta_qualita(url):
+    """Toglie il codice di 'dimensione piccola' che Amazon mette nei link
+    delle immagini (es. "._AC_SX300_"), così Telegram carica la versione
+    grande e nitida invece di quella sgranata."""
+    if not url:
+        return url
+    return re.sub(r'\._[A-Za-z0-9,]+_\.', '.', url)
+
+
 def send_message(chat_id, text):
     return requests.post(f"{API_URL}/sendMessage", data={"chat_id": chat_id, "text": text}, timeout=15)
 
@@ -106,11 +115,11 @@ def extract_image(html):
 
     main_img = soup.find('img', id='landingImage')
     if main_img and main_img.get('src'):
-        return main_img['src']
+        return _immagine_alta_qualita(main_img['src'])
 
     old_hires = soup.find('img', attrs={'data-old-hires': True})
     if old_hires and old_hires.get('data-old-hires'):
-        return old_hires['data-old-hires']
+        return _immagine_alta_qualita(old_hires['data-old-hires'])
 
     dynamic_img = soup.find('img', attrs={'data-a-dynamic-image': True})
     if dynamic_img:
@@ -118,17 +127,17 @@ def extract_image(html):
         try:
             data = json.loads(html_module.unescape(raw))
             if data:
-                return list(data.keys())[0]
+                return _immagine_alta_qualita(list(data.keys())[0])
         except Exception:
             pass
 
     og_image = soup.find('meta', property='og:image')
     if og_image and og_image.get('content'):
-        return og_image['content']
+        return _immagine_alta_qualita(og_image['content'])
 
     tw_image = soup.find('meta', attrs={'name': 'twitter:image'})
     if tw_image and tw_image.get('content'):
-        return tw_image['content']
+        return _immagine_alta_qualita(tw_image['content'])
 
     return ""
 
@@ -192,7 +201,7 @@ def finalize(chat_id):
             "prezzo_originale": str(prezzo_pieno_f).replace(".", ","),
             "sconto_percento": sconto_percento,
             "link_affiliato": link,
-            "immagine_url": immagine,
+            "immagine_url": _immagine_alta_qualita(immagine),
             "ASIN": asin,
             "fonte": "manuale",
             # Il prodotto è inserito manualmente da Francesco stesso tramite /aggiungi:
