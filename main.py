@@ -19,6 +19,16 @@ INTERVALLO_MINIMO = timedelta(minutes=55)  # un po' meno di un'ora, per tolleran
 ORA_INIZIO = 8   # 08:00 ora italiana
 ORA_FINE = 22    # 22:00 ora italiana
 
+# --- SVUOTA CODA: alle 22:00 pubblica tutto quello che è rimasto, uno dietro
+# l'altro, così niente scade inutilizzato durante la notte. ---
+ORA_SVUOTA = 22
+SVUOTATO_OGGI_KEY = "ultimo_svuotamento"
+PAUSA_TRA_POST_SVUOTAMENTO = 3  # secondi tra un post e l'altro, per non intasare Telegram
+
+
+def _oggi_italia():
+    return datetime.now(ZoneInfo("Europe/Rome")).date().isoformat()
+
 
 def _dentro_fascia_oraria():
     """Usa il fuso orario 'Europe/Rome': si aggiusta da solo con l'ora legale/solare,
@@ -40,10 +50,69 @@ def _tempo_trascorso_abbastanza():
     return datetime.now(timezone.utc) - ultima_dt >= INTERVALLO_MINIMO
 
 
+def _deve_svuotare():
+    """Vero solo durante l'ora 22:00-22:59 italiana, e solo se non l'abbiamo
+    già fatto oggi (evita di ripetere lo svuotamento ad ogni ping)."""
+    ora_italia = datetime.now(ZoneInfo("Europe/Rome"))
+    if ora_italia.hour != ORA_SVUOTA:
+        return False
+    ultimo_giorno_svuotato = get_state(SVUOTATO_OGGI_KEY, "")
+    return ultimo_giorno_svuotato != _oggi_italia()
+
+
+async def _pubblica_un_prodotto(product):
+    """Invia un singolo prodotto su Telegram (con o senza immagine)."""
+    if product.get("image_url"):
+        await post_product(product)
+    else:
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        testo = format_message(product)
+        await bot.send_message(
+            chat_id=TELEGRAM_CHANNEL_ID,
+            text=testo,
+            parse_mode="HTML"
+        )
+
+
+async def svuota_coda():
+    """Pubblica TUTTI i prodotti ancora disponibili, uno dietro l'altro,
+    così non scadono inutilizzati durante la notte. Ritorna quanti ne ha pubblicati."""
+    pubblicati = 0
+
+    while True:
+        product, sheet_ref = pick_next_product()
+        if product is None:
+            break
+
+        try:
+            await _pubblica_un_prodotto(product)
+            log.info("✅ (svuotamento) Pubblicato: %s", product["title"])
+        except Exception:
+            log.exception("Errore pubblicando durante lo svuotamento: %s", product.get("title"))
+            break  # meglio fermarsi che rischiare un ciclo che non finisce mai
+
+        if sheet_ref:
+            ws, row_number = sheet_ref
+            mark_row(ws, row_number, stato="PUBBLICATO", extra_updates={"pubblicato_il": now_iso()})
+
+        pubblicati += 1
+        await asyncio.sleep(PAUSA_TRA_POST_SVUOTAMENTO)
+
+    set_state(SVUOTATO_OGGI_KEY, _oggi_italia())
+    set_state(ULTIMA_PUBBLICAZIONE_KEY, now_iso())
+    log.info("Svuotamento coda completato: %d prodotti pubblicati.", pubblicati)
+    return pubblicati
+
+
 async def pubblica_prodotto():
     """Pubblica il prossimo prodotto disponibile, ma SOLO se è il momento giusto
     (dentro l'orario 08-22 e non troppo a ridosso dell'ultima pubblicazione).
-    Ritorna True se ha pubblicato, False se ha saltato."""
+    Alle 22:00 invece pubblica TUTTO quello che è rimasto in coda.
+    Ritorna True se ha pubblicato qualcosa, False se ha saltato."""
+
+    if _deve_svuotare():
+        pubblicati = await svuota_coda()
+        return pubblicati > 0
 
     if not _dentro_fascia_oraria():
         log.info("Fuori fascia oraria (08-22 Italia), salto.")
@@ -59,17 +128,10 @@ async def pubblica_prodotto():
         return False
 
     # --- GESTIONE DELLA PUBBLICAZIONE ---
+    await _pubblica_un_prodotto(product)
     if product.get("image_url"):
-        await post_product(product)
         log.info("✅ Pubblicato (con immagine): %s", product["title"])
     else:
-        bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        testo = format_message(product)
-        await bot.send_message(
-            chat_id=TELEGRAM_CHANNEL_ID,
-            text=testo,
-            parse_mode="HTML"
-        )
         log.warning("⚠️ Pubblicato (SENZA immagine, campo vuoto nel foglio): %s", product["title"])
 
     # --- AGGIORNAMENTO DEL FOGLIO ---
