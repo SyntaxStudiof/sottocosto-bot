@@ -1,8 +1,19 @@
+import re
 import random
 from datetime import datetime, timezone
 
 from config import MIN_DISCOUNT_PERCENT
 from sheet_client import get_all_rows, mark_row, now_iso
+
+
+def _immagine_alta_qualita(url):
+    """Toglie il codice di 'dimensione piccola' che Amazon mette nei link
+    delle immagini (es. "._AC_SX300_"), così Telegram carica la versione
+    grande e nitida invece di quella sgranata. Fatto anche qui come rete
+    di sicurezza, nel caso nel foglio ci sia già un link piccolo salvato."""
+    if not url:
+        return url
+    return re.sub(r'\._[A-Za-z0-9,]+_\.', '.', url)
 
 
 def _is_valid(row):
@@ -74,7 +85,7 @@ def pick_next_product(min_discount=MIN_DISCOUNT_PERCENT):
         "price": float(str(chosen.get("prezzo", 0)).replace(",", ".")),
         "old_price": float(str(chosen.get("prezzo_originale", 0)).replace(",", ".")),
         "discount_percent": int(chosen.get("sconto_percento", 0)),
-        "image_url": chosen.get("immagine_url", "").strip(),
+        "image_url": _immagine_alta_qualita(chosen.get("immagine_url", "").strip()),
         "affiliate_link": chosen.get("link_affiliato", "").strip(),
     }
     return product, (ws, chosen["_row_number"])
