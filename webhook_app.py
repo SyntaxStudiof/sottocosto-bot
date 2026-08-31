@@ -6,7 +6,13 @@ import requests
 from flask import Flask, request
 
 from config import TELEGRAM_BOT_TOKEN
-from telegram_commands import handle_aggiungi, handle_pending_reply, handle_callback_query
+from telegram_commands import (
+    handle_aggiungi,
+    handle_pending_reply,
+    handle_callback_query,
+    handle_start,
+    handle_pending_link,
+)
 from main import pubblica_prodotto
 
 app = Flask(__name__)
@@ -40,11 +46,16 @@ def webhook():
             text = message.get("text", "")
             chat_id = message.get("chat", {}).get("id")
 
-            if text.startswith("/aggiungi"):
+            if text == "/start":
+                handle_start(chat_id)
+            elif text.startswith("/aggiungi"):
                 args = text[len("/aggiungi"):].strip()
                 handle_aggiungi(chat_id, args)
             elif chat_id:
-                handle_pending_reply(chat_id, text)
+                # Prima prova se è un link mandato dopo aver cliccato "Aggiungi offerta"
+                if not handle_pending_link(chat_id, text):
+                    # Altrimenti è una risposta al flusso interattivo
+                    handle_pending_reply(chat_id, text)
 
     except Exception:
         err = traceback.format_exc()
@@ -52,17 +63,13 @@ def webhook():
         _notify_owner_error(err)
 
     # IMPORTANTE: rispondere sempre 200, subito, qualunque cosa succeda.
-    # Se Telegram non riceve un 200 in tempo, ritenta l'invio dello stesso
-    # update -> il comando viene rieseguito da capo, causando doppioni
-    # nello stato pending e nessuna risposta chiara all'utente.
     return "", 200
 
 
 @app.route("/")
 def health():
     # UptimeRobot pinga questo indirizzo ogni 5 minuti per tenere sveglio Render.
-    # Ne approfittiamo per controllare se è ora di pubblicare il prossimo prodotto:
-    # niente più dipendenza dal cron di GitHub Actions, che si è dimostrato inaffidabile.
+    # Ne approfittiamo per controllare se è ora di pubblicare il prossimo prodotto.
     try:
         asyncio.run(pubblica_prodotto())
     except Exception:
