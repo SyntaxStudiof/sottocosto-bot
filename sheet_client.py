@@ -15,6 +15,10 @@ CREDS_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 _HEADER_CACHE = None
 _CLIENT_CACHE = None
 
+# --- CACHE PER LEGGI CONFIG (riduce le chiamate a Sheets) ---
+_CONFIG_CACHE = {}
+_CONFIG_CACHE_TIME = {}
+_CONFIG_CACHE_TTL = 300  # 5 minuti
 
 def _get_client():
     global _CLIENT_CACHE
@@ -23,7 +27,6 @@ def _get_client():
         creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         _CLIENT_CACHE = gspread.authorize(creds)
     return _CLIENT_CACHE
-
 
 def _with_retry(fn, *args, retries=4, **kwargs):
     """Ritenta le chiamate all'API di Google in caso di 429 (quota superata),
@@ -42,12 +45,10 @@ def _with_retry(fn, *args, retries=4, **kwargs):
             raise
     raise last_err
 
-
 def _get_worksheet():
     client = _get_client()
     spreadsheet = _with_retry(client.open_by_key, SHEET_ID)
     return spreadsheet.worksheet("Foglio1")
-
 
 def _get_header():
     """Legge l'intestazione una volta sola e la mette in cache."""
@@ -56,7 +57,6 @@ def _get_header():
         ws = _get_worksheet()
         _HEADER_CACHE = _with_retry(ws.row_values, 1)
     return _HEADER_CACHE
-
 
 def get_all_rows():
     """Ritorna lista di dict, ognuno con anche il numero di riga reale nel foglio."""
@@ -67,7 +67,6 @@ def get_all_rows():
         r["_row_number"] = i
         rows.append(r)
     return rows, ws
-
 
 def mark_row(ws, row_number, stato, extra_updates=None):
     """Aggiorna la colonna stato (e opzionalmente altre) per una riga."""
@@ -80,10 +79,8 @@ def mark_row(ws, row_number, stato, extra_updates=None):
             col_index = header.index(col_name) + 1
             _with_retry(ws.update_cell, row_number, col_index, value)
 
-
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
-
 
 def _get_config_worksheet():
     client = _get_client()
@@ -95,15 +92,26 @@ def _get_config_worksheet():
         ws.update([["chiave", "valore"]], "A1")
         return ws
 
-
 def get_state(key, default=""):
+    """Legge una chiave dal foglio Config con cache in memoria."""
+    global _CONFIG_CACHE, _CONFIG_CACHE_TIME
+    
+    now = time.time()
+    if key in _CONFIG_CACHE and (now - _CONFIG_CACHE_TIME.get(key, 0)) < _CONFIG_CACHE_TTL:
+        return _CONFIG_CACHE[key]
+    
     ws = _get_config_worksheet()
     values = _with_retry(ws.get_all_records, numericise_ignore=['all'])
     for row in values:
         if row.get("chiave") == key:
-            return str(row.get("valore", default))
+            val = str(row.get("valore", default))
+            _CONFIG_CACHE[key] = val
+            _CONFIG_CACHE_TIME[key] = now
+            return val
+    
+    _CONFIG_CACHE[key] = default
+    _CONFIG_CACHE_TIME[key] = now
     return default
-
 
 def set_state(key, value):
     ws = _get_config_worksheet()
@@ -113,7 +121,10 @@ def set_state(key, value):
         _with_retry(ws.update, f"B{cell.row}", [[value_str]], value_input_option='RAW')
     else:
         _with_retry(ws.append_row, [key, value_str], value_input_option='RAW')
-
+    
+    # Aggiorna la cache
+    _CONFIG_CACHE[key] = value_str
+    _CONFIG_CACHE_TIME[key] = time.time()
 
 def delete_state(key):
     """Cancella davvero la riga della chiave, invece di lasciarla con valore vuoto."""
@@ -121,7 +132,12 @@ def delete_state(key):
     cell = _with_retry(ws.find, key)
     if cell:
         _with_retry(ws.delete_rows, cell.row)
-
+    
+    # Rimuovi dalla cache
+    if key in _CONFIG_CACHE:
+        del _CONFIG_CACHE[key]
+    if key in _CONFIG_CACHE_TIME:
+        del _CONFIG_CACHE_TIME[key]
 
 def get_state_json(key, default=None):
     """Legge una chiave e la interpreta come JSON. Ritorna {} (o default) se assente/non valida."""
@@ -133,11 +149,9 @@ def get_state_json(key, default=None):
     except (ValueError, TypeError):
         return default if default is not None else {}
 
-
 def set_state_json(key, data):
     """Scrive un dict come singola cella JSON, invece di una riga per campo."""
     set_state(key, json.dumps(data, ensure_ascii=False))
-
 
 def append_product_row(product_dict):
     """Aggiunge una nuova riga prodotto in coda, rispettando l'ordine delle colonne del foglio principale."""
