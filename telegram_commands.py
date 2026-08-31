@@ -5,14 +5,15 @@ import requests
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID
-from sheet_client import get_state, set_state, delete_state, get_state_json, set_state_json, append_product_row
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, AUTO_APPROVAL_ENABLED
+from sheet_client import get_state, set_state, delete_state, get_state_json, set_state_json, append_product_row, get_all_rows
+from auto_approval import arricchisci_dati, valida_offerta, asin_recenti_dal_foglio
 
 API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept-Language": "it-IT,it;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
@@ -26,7 +27,6 @@ PROMPTS = {
     "prezzo_pieno": "Qual è il prezzo pieno originale? (es: 29.99)",
 }
 
-
 def add_affiliate_tag(url):
     if "tag=" in url:
         url = re.sub(r"tag=[^&]+", f"tag={AFFILIATE_TAG}", url)
@@ -35,26 +35,19 @@ def add_affiliate_tag(url):
         url = f"{url}{separator}tag={AFFILIATE_TAG}"
     return url
 
-
 def _immagine_alta_qualita(url):
-    """Toglie il codice di 'dimensione piccola' che Amazon mette nei link
-    delle immagini (es. "._AC_SX300_"), così Telegram carica la versione
-    grande e nitida invece di quella sgranata."""
     if not url:
         return url
     return re.sub(r'\._[A-Za-z0-9_,]+_\.', '.', url)
 
-
 def send_message(chat_id, text):
     return requests.post(f"{API_URL}/sendMessage", data={"chat_id": chat_id, "text": text}, timeout=15)
-
 
 def answer_callback(callback_id, text=""):
     requests.post(f"{API_URL}/answerCallbackQuery", data={
         "callback_query_id": callback_id,
         "text": text,
     }, timeout=15)
-
 
 def edit_message(chat_id, message_id, text):
     requests.post(f"{API_URL}/editMessageText", data={
@@ -63,14 +56,12 @@ def edit_message(chat_id, message_id, text):
         "text": text,
     }, timeout=15)
 
-
 def resolve_and_extract_asin(link):
     resp = requests.get(link, allow_redirects=True, timeout=20, headers=HEADERS)
     final_url = resp.url
     match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", final_url)
     asin = match.group(1) if match else ""
     return asin, resp.text, final_url
-
 
 def extract_title(html):
     soup = BeautifulSoup(html, 'html.parser')
@@ -106,7 +97,6 @@ def extract_title(html):
 
     return ""
 
-
 def extract_image(html):
     soup = BeautifulSoup(html, 'html.parser')
 
@@ -141,16 +131,26 @@ def extract_image(html):
 
     return ""
 
+def extract_price(html):
+    match = re.search(r'<span class="a-price-whole">(\d+[.,]?\d*)</span>', html)
+    if match:
+        return match.group(1).replace(".", ",")
+    return None
 
-# --- STATO PENDING PER /aggiungi ---
-# Prima: 7 righe separate per ogni chat_id nel foglio Config (pending_link_X,
-# pending_titolo_X, ecc.), ognuna letta/scritta con una chiamata API a parte.
-# Ora: un solo blob JSON per chat_id -> molte meno chiamate a Google Sheets,
-# quindi molto meno rischio di 429 e di righe duplicate se qualcosa fallisce.
+def extract_price_pieno(html):
+    patterns = [
+        r'<span class="a-price a-text-price"[^>]*>\s*<span class="a-offscreen">[^€]*€\s*(\d+[.,]\d{2})',
+        r'(?:Prezzo consigliato|Prezzo precedente|List price|Prezzo pieno)[:\s]*€?\s*(\d+[.,]\d{2})',
+        r'a-text-price[^>]*>€\s*(\d+[.,]\d{2})<',
+    ]
+    for p in patterns:
+        m = re.search(p, html, re.IGNORECASE)
+        if m:
+            return m.group(1).replace(".", ",")
+    return None
 
 def _pending_key(chat_id):
     return f"pending_{chat_id}"
-
 
 def ask_next(chat_id):
     state = get_state_json(_pending_key(chat_id))
@@ -161,7 +161,6 @@ def ask_next(chat_id):
     next_field = queue[0]
     send_message(chat_id, PROMPTS[next_field])
 
-
 def finalize(chat_id):
     state = get_state_json(_pending_key(chat_id))
     link = state.get("link", "")
@@ -171,7 +170,6 @@ def finalize(chat_id):
     prezzo_scontato = state.get("prezzo_scontato", "")
     prezzo_pieno = state.get("prezzo_pieno", "")
 
-    # --- FASE 1: Controllo prezzi ---
     try:
         prezzo_scontato_f = float(str(prezzo_scontato).replace(",", "."))
         prezzo_pieno_f = float(str(prezzo_pieno).replace(",", "."))
@@ -180,7 +178,6 @@ def finalize(chat_id):
         delete_state(_pending_key(chat_id))
         return
 
-    # --- FASE 2: Risposta IMMEDIATA per evitare timeout di Telegram ---
     loading_msg = send_message(chat_id, "⏳ Salvataggio su Google Sheets in corso... attendi qualche secondo.")
 
     loading_msg_id = None
@@ -190,7 +187,6 @@ def finalize(chat_id):
         except Exception:
             pass
 
-    # --- FASE 3: Salvataggio su Google Sheets ---
     try:
         sconto_percento = round((1 - prezzo_scontato_f / prezzo_pieno_f) * 100)
         now = datetime.now(timezone.utc)
@@ -204,9 +200,6 @@ def finalize(chat_id):
             "immagine_url": _immagine_alta_qualita(immagine),
             "ASIN": asin,
             "fonte": "manuale",
-            # Il prodotto è inserito manualmente da Francesco stesso tramite /aggiungi:
-            # non serve un'approvazione ulteriore, quindi entra già come APPROVATO
-            # così pubblica.yml lo trova subito.
             "stato": "APPROVATO",
             "aggiunto_il": now.isoformat(),
             "scade_il": (now + timedelta(hours=6)).isoformat(),
@@ -227,9 +220,7 @@ def finalize(chat_id):
             send_message(chat_id, error_text)
 
     finally:
-        # Pulisce lo stato: ora è una sola chiave invece di 7
         delete_state(_pending_key(chat_id))
-
 
 def handle_aggiungi(chat_id, args):
     link = args.strip()
@@ -240,8 +231,49 @@ def handle_aggiungi(chat_id, args):
     asin, html, final_url = resolve_and_extract_asin(link)
     titolo = extract_title(html)
     immagine = extract_image(html)
+    prezzo_scontato = extract_price(html)
+    prezzo_pieno = extract_price_pieno(html)
     link_con_tag = add_affiliate_tag(final_url)
 
+    # --- NUOVO: tentativo di auto-completamento e approvazione ---
+    if AUTO_APPROVAL_ENABLED and asin:
+        try:
+            dati = {
+                "titolo": titolo or None,
+                "prezzo_scontato": float(str(prezzo_scontato).replace(",", ".")) if prezzo_scontato else None,
+                "prezzo_pieno": float(str(prezzo_pieno).replace(",", ".")) if prezzo_pieno else None,
+                "sconto_percent": None,
+                "asin": asin,
+                "immagine_url": immagine or None,
+                "link_originale": final_url,
+            }
+            dati = arricchisci_dati(dati)
+            righe, _ = get_all_rows()
+            ok, motivi = valida_offerta(dati, asin_recenti_dal_foglio(righe))
+            if ok:
+                now = datetime.now(timezone.utc)
+                append_product_row({
+                    "titolo": dati["titolo"],
+                    "prezzo": dati["prezzo_scontato_eur"],
+                    "prezzo_originale": dati["prezzo_pieno_eur"],
+                    "sconto_percento": dati["sconto_percent"],
+                    "link_affiliato": dati["link_affiliato"],
+                    "immagine_url": _immagine_alta_qualita(dati["immagine_url"]),
+                    "ASIN": dati["asin"],
+                    "fonte": "manuale",
+                    "stato": "APPROVATO",
+                    "aggiunto_il": now.isoformat(),
+                    "scade_il": (now + timedelta(hours=6)).isoformat(),
+                    "pubblicato_il": "",
+                })
+                send_message(chat_id, f"🤖 Aggiunto automaticamente: {dati['titolo']}\n💰 {dati['prezzo_scontato_eur']}€ invece di {dati['prezzo_pieno_eur']}€ (−{dati['sconto_percent']}%)")
+                return
+            else:
+                send_message(chat_id, "ℹ️ Dati incompleti, procedo con le domande: " + "; ".join(motivi))
+        except Exception as e:
+            send_message(chat_id, f"⚠️ Auto-completamento non riuscito, procedo con le domande.")
+
+    # --- Flusso interattivo esistente (fallback) ---
     queue = []
     if not titolo:
         queue.append("titolo")
@@ -271,7 +303,6 @@ def handle_aggiungi(chat_id, args):
 
     ask_next(chat_id)
 
-
 def handle_pending_reply(chat_id, text):
     state = get_state_json(_pending_key(chat_id))
     queue = state.get("queue", [])
@@ -298,7 +329,6 @@ def handle_pending_reply(chat_id, text):
         finalize(chat_id)
 
     return True
-
 
 def handle_callback_query(callback_query):
     callback_id = callback_query["id"]
@@ -348,15 +378,13 @@ def handle_callback_query(callback_query):
         try:
             append_product_row({
                 "titolo": titolo_finale,
-                "prezzo": str(prezzo_scontato).replace(".", ","),
-                "prezzo_originale": str(prezzo_pieno).replace(".", ","),
+                "prezzo": str(prezzo_scontato).replace(",", ","),
+                "prezzo_originale": str(prezzo_pieno).replace(",", ","),
                 "sconto_percento": sconto_percento,
                 "link_affiliato": link_con_tag,
                 "immagine_url": immagine_url,
                 "ASIN": asin,
                 "fonte": "canale_terzo",
-                # Il tap su "Approva" È l'approvazione: deve entrare già
-                # come APPROVATO, non NUOVO, altrimenti pubblica.yml lo ignora.
                 "stato": "APPROVATO",
                 "aggiunto_il": now.isoformat(),
                 "scade_il": (now + timedelta(hours=6)).isoformat(),
