@@ -13,7 +13,7 @@ def _immagine_alta_qualita(url):
     di sicurezza, nel caso nel foglio ci sia già un link piccolo salvato."""
     if not url:
         return url
-    return re.sub(r'\._[A-Za-z0-9,]+_\.', '.', url)
+    return re.sub(r'\._[A-Za-z0-9_,]+_\.', '.', url)
 
 
 def _is_valid(row):
