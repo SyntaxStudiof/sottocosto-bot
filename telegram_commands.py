@@ -43,10 +43,12 @@ def _immagine_alta_qualita(url):
     return re.sub(r'\._[A-Za-z0-9_,]+_\.', '.', url)
 
 
-def send_message(chat_id, text, reply_markup=None):
+def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     data = {"chat_id": chat_id, "text": text}
     if reply_markup:
         data["reply_markup"] = reply_markup
+    if parse_mode:
+        data["parse_mode"] = parse_mode
     return requests.post(f"{API_URL}/sendMessage", data=data, timeout=15)
 
 
@@ -63,6 +65,16 @@ def edit_message(chat_id, message_id, text):
         "message_id": message_id,
         "text": text,
     }, timeout=15)
+
+
+def delete_message(chat_id, message_id):
+    try:
+        requests.post(f"{API_URL}/deleteMessage", data={
+            "chat_id": chat_id,
+            "message_id": message_id,
+        }, timeout=10)
+    except Exception:
+        pass
 
 
 def resolve_and_extract_asin(link):
@@ -167,7 +179,7 @@ def _pending_key(chat_id):
     return f"pending_{chat_id}"
 
 
-# ========== NUOVO: MENU CON PULSANTI ==========
+# ================= MENU CON PULSANTI =================
 
 def handle_start(chat_id):
     """Mostra il menu principale con i due pulsanti."""
@@ -180,80 +192,89 @@ def handle_start(chat_id):
     send_message(chat_id, "👋 Cosa vuoi fare?", reply_markup=json.dumps(keyboard))
 
 
+def _ora_italiana(dt_utc):
+    return dt_utc + timedelta(hours=2)
+
+
 def show_recap(chat_id):
-    """Mostra un riepilogo delle offerte in coda di pubblicazione."""
+    """Riepilogo pulito della coda di pubblicazione."""
     try:
         righe, _ = get_all_rows()
         now = datetime.now(timezone.utc)
 
-        # Filtra solo quelle pronte (APPROVATO o NUOVO, non scadute)
         coda = []
         for r in righe:
             stato = (r.get("stato") or "").strip().upper()
             if stato not in ("NUOVO", "APPROVATO"):
                 continue
-            scade = r.get("scade_il", "").strip()
+            scade = (r.get("scade_il") or "").strip()
             if scade:
                 try:
-                    scadenza = datetime.fromisoformat(scade.replace("Z", "+00:00"))
-                    if scadenza < now:
+                    if datetime.fromisoformat(scade.replace("Z", "+00:00")) < now:
                         continue
-                except:
-                    continue
+                except Exception:
+                    pass
             coda.append(r)
 
-        if not coda:
-            keyboard = {
-                "inline_keyboard": [[
-                    {"text": "🔙 Torna al menu", "callback_data": "menu_back"},
-                ]]
-            }
-            send_message(chat_id, "📭 La coda è vuota. Nessuna offerta in attesa di pubblicazione.",
-                         reply_markup=json.dumps(keyboard))
-            return
-
-        # Ordina per aggiunto_il (le più vecchie prima)
-        def sort_key(r):
-            try:
-                return datetime.fromisoformat(r.get("aggiunto_il", "").replace("Z", "+00:00"))
-            except:
-                return datetime.max.replace(tzinfo=timezone.utc)
-        coda.sort(key=sort_key)
-
-        # Conta per stato
-        approvate = sum(1 for r in coda if r.get("stato", "").strip().upper() == "APPROVATO")
-        nuove = len(coda) - approvate
-
-        # Costruisci il messaggio
-        testo = f"📋 <b>Coda pubblicazioni</b>\n\n"
-        testo += f"✅ Pronte: <b>{len(coda)}</b> offerte\n"
-        testo += f"  • Approvate: {approvate}\n"
-        testo += f"  • Nuove: {nuove}\n\n"
-
-        # Mostra le prime 5
-        testo += "<b>Prossime in pubblicazione:</b>\n\n"
-        for i, r in enumerate(coda[:5], 1):
-            titolo = r.get("titolo", "Senza titolo")[:60]
-            prezzo = r.get("prezzo", "?")
-            sconto = r.get("sconto_percento", "?")
-            scade = r.get("scade_il", "")
-            try:
-                scade_dt = datetime.fromisoformat(scade.replace("Z", "+00:00"))
-                scade_fmt = scade_dt.strftime("%d/%m %H:%M")
-            except:
-                scade_fmt = "?"
-            testo += f"{i}. {titolo}\n   💰 {prezzo}€ (−{sconto}%) · Scade: {scade_fmt}\n\n"
-
-        if len(coda) > 5:
-            testo += f"<i>...e altre {len(coda) - 5} offerte.</i>"
-
-        # Pulsante per tornare al menu
         keyboard = {
             "inline_keyboard": [[
-                {"text": "🔙 Torna al menu", "callback_data": "menu_back"},
+                {"text": "🔄 Aggiorna", "callback_data": "menu_refresh"},
+                {"text": "🔙 Menu", "callback_data": "menu_back"},
             ]]
         }
-        send_message(chat_id, testo, reply_markup=json.dumps(keyboard))
+
+        if not coda:
+            send_message(
+                chat_id,
+                "📭 <b>Coda vuota</b>\nNessuna offerta in attesa di pubblicazione.",
+                reply_markup=json.dumps(keyboard),
+                parse_mode="HTML",
+            )
+            return
+
+        def sort_key(r):
+            try:
+                return datetime.fromisoformat((r.get("aggiunto_il") or "").replace("Z", "+00:00"))
+            except Exception:
+                return datetime.max.replace(tzinfo=timezone.utc)
+
+        coda.sort(key=sort_key)
+
+        approvate = sum(1 for r in coda if (r.get("stato") or "").strip().upper() == "APPROVATO")
+        nuove = len(coda) - approvate
+
+        parti = []
+        parti.append("📋 <b>CODA PUBBLICAZIONI</b>")
+        parti.append("")
+        parti.append(f"✅ Pronte: <b>{len(coda)}</b>   (approvate {approvate} · nuove {nuove})")
+        parti.append("")
+        parti.append("⏭ <b>Prossime uscite:</b>")
+
+        for i, r in enumerate(coda[:5], 1):
+            titolo = html_module.escape((r.get("titolo") or "Senza titolo").strip()[:70])
+            prezzo = html_module.escape(str(r.get("prezzo", "?")))
+            sconto = html_module.escape(str(r.get("sconto_percento", "?")))
+            try:
+                scade_it = _ora_italiana(
+                    datetime.fromisoformat((r.get("scade_il") or "").replace("Z", "+00:00"))
+                )
+                scade_fmt = scade_it.strftime("%d/%m ore %H:%M")
+            except Exception:
+                scade_fmt = "—"
+            parti.append("")
+            parti.append(f"<b>{i}.</b> {titolo}")
+            parti.append(f"💰 {prezzo} € · −{sconto}% · ⏰ {scade_fmt}")
+
+        if len(coda) > 5:
+            parti.append("")
+            parti.append(f"<i>…e altre {len(coda) - 5} in coda.</i>")
+
+        send_message(
+            chat_id,
+            "\n".join(parti),
+            reply_markup=json.dumps(keyboard),
+            parse_mode="HTML",
+        )
 
     except Exception as e:
         send_message(chat_id, f"❌ Errore nel recupero della coda: {str(e)[:100]}")
@@ -266,18 +287,16 @@ def handle_menu_aggiungi(chat_id):
 
 
 def handle_pending_link(chat_id, text):
-    """Gestisce il link mandato dopo aver cliccato 'Aggiungi offerta'.
-    Ritorna True se ha gestito il messaggio (era in attesa di link), False altrimenti."""
+    """Gestisce il link mandato dopo aver cliccato 'Aggiungi offerta'."""
     state = get_state_json(_pending_key(chat_id))
     if state.get("waiting_for_link"):
         delete_state(_pending_key(chat_id))
-        # Re-inizializza lo stato pending come farebbe handle_aggiungi
         handle_aggiungi(chat_id, text)
         return True
     return False
 
 
-# ========== FINE NUOVO ==========
+# ================= FINE MENU =================
 
 
 def ask_next(chat_id):
@@ -468,7 +487,7 @@ def handle_callback_query(callback_query):
     chat_id = callback_query["message"]["chat"]["id"]
     message_id = callback_query["message"]["message_id"]
 
-    # --- NUOVI PULSANTI MENU ---
+    # --- PULSANTI MENU ---
     if data == "menu_aggiungi":
         answer_callback(callback_id)
         handle_menu_aggiungi(chat_id)
@@ -479,16 +498,15 @@ def handle_callback_query(callback_query):
         show_recap(chat_id)
         return
 
+    if data == "menu_refresh":
+        answer_callback(callback_id)
+        delete_message(chat_id, message_id)
+        show_recap(chat_id)
+        return
+
     if data == "menu_back":
         answer_callback(callback_id)
-        # Rimuovi il messaggio recap e rimanda lo start
-        try:
-            requests.post(f"{API_URL}/deleteMessage", data={
-                "chat_id": chat_id,
-                "message_id": message_id,
-            }, timeout=10)
-        except Exception:
-            pass
+        delete_message(chat_id, message_id)
         handle_start(chat_id)
         return
 
