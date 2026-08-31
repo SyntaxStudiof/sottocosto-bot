@@ -12,7 +12,7 @@ from utils import clean_title, split_multiple_offers
 from sheet_client import get_state, set_state, get_all_rows, append_product_row
 from config import AUTO_APPROVAL_ENABLED
 from ai_offer_parser import parse_offerta_da_testo
-from auto_approval import arricchisci_dati, valida_offerta, asin_recenti_dal_foglio
+from auto_approval import arricchisci_dati_da_html, valida_offerta, asin_recenti_dal_foglio
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
@@ -141,7 +141,7 @@ def process_channel(client, channel_username, righe):
                 if not product_link:
                     continue
 
-                asin, _, _ = resolve_and_extract_asin(product_link)
+                asin, html_page, _ = resolve_and_extract_asin(product_link)
                 if asin:
                     candidate_id = f"{channel_username}_{asin}"
                 else:
@@ -173,7 +173,6 @@ def process_channel(client, channel_username, righe):
 
                 if prezzo_scontato is None:
                     try:
-                        _, html_page, _ = resolve_and_extract_asin(product_link)
                         scraped_price = extract_price(html_page)
                         if scraped_price:
                             prezzo_scontato = scraped_price
@@ -181,7 +180,7 @@ def process_channel(client, channel_username, righe):
                     except:
                         pass
 
-                # --- NUOVO: tentativo di approvazione automatica ---
+                # --- NUOVO: tentativo di approvazione automatica con HTML già scaricato ---
                 auto_done = False
                 if AUTO_APPROVAL_ENABLED:
                     try:
@@ -196,7 +195,7 @@ def process_channel(client, channel_username, righe):
                             dati["asin"] = asin
                         if not dati.get("link_originale"):
                             dati["link_originale"] = product_link
-                        dati = arricchisci_dati(dati)
+                        dati = arricchisci_dati_da_html(dati, html_page)
                         ok, motivi = valida_offerta(dati, asin_recenti_dal_foglio(righe))
                         if ok:
                             now_auto = datetime.now(timezone.utc)
