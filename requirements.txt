@@ -7,3 +7,4 @@ gunicorn
 telethon
 beautifulsoup4
 tzdata
+google-genai
