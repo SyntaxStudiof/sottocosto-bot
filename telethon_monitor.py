@@ -150,37 +150,54 @@ def process_channel(client, channel_username, righe):
                 if candidate_id in processed_asins:
                     continue
 
+                # --- ESTRAZIONE PREZZI (versione robusta) ---
                 prezzi_scontati = re.findall(r'[Pp]rezzo\s*in\s*offerta\s*[:.]?\s*(\d+[.,]\d{2})', single_offer_text)
                 prezzi_originali = re.findall(r'[Pp]rezzo\s*consigliato\s*[:.]?\s*(\d+[.,]\d{2})', single_offer_text)
 
                 prezzo_scontato = None
                 prezzo_originale = None
 
+                # Prova prima con i pattern specifici
                 if prezzi_scontati:
                     prezzo_scontato = prezzi_scontati[0]
-                else:
-                    all_prices = PRICE_RE.findall(single_offer_text)
-                    if all_prices:
-                        float_prices = sorted([float(p.replace(',', '.')) for p in all_prices])
-                        prezzo_scontato = str(float_prices[0]).replace('.', ',')
-                        if len(float_prices) > 1:
-                            prezzo_originale = str(float_prices[-1]).replace('.', ',')
 
                 if prezzi_originali:
                     prezzo_originale = prezzi_originali[0]
 
-                title_cleaned = clean_title(single_offer_text)
+                # Se mancano, prova con il fallback generale (tutti i prezzi nel testo)
+                if prezzo_scontato is None or prezzo_originale is None:
+                    all_prices = PRICE_RE.findall(single_offer_text)
+                    if all_prices:
+                        float_prices = sorted([float(p.replace(',', '.')) for p in all_prices])
+                        # Prendi il più piccolo come scontato, il più grande come pieno
+                        if prezzo_scontato is None and len(float_prices) >= 1:
+                            prezzo_scontato = str(float_prices[0]).replace('.', ',')
+                        if prezzo_originale is None and len(float_prices) > 1:
+                            prezzo_originale = str(float_prices[-1]).replace('.', ',')
 
+                # Sanity check: se prezzo_scontato >= prezzo_originale, scambia (canale sorgente ha invertito)
+                if prezzo_scontato and prezzo_originale:
+                    try:
+                        p_s = float(prezzo_scontato.replace(",", "."))
+                        p_o = float(prezzo_originale.replace(",", "."))
+                        if p_s >= p_o:
+                            # Scambia i prezzi
+                            prezzo_scontato, prezzo_originale = prezzo_originale, prezzo_scontato
+                    except ValueError:
+                        pass
+
+                # Ultimo tentativo: scraping della pagina Amazon (se ancora mancano i prezzi)
                 if prezzo_scontato is None:
                     try:
                         scraped_price = extract_price(html_page)
                         if scraped_price:
                             prezzo_scontato = scraped_price
-                            prezzo_originale = None
                     except:
                         pass
 
-                # --- NUOVO: tentativo di approvazione automatica con HTML già scaricato ---
+                title_cleaned = clean_title(single_offer_text)
+
+                # --- Tentativo di approvazione automatica con HTML già scaricato ---
                 auto_done = False
                 if AUTO_APPROVAL_ENABLED:
                     try:
