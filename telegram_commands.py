@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, AUTO_APPROVAL_ENABLED
 from sheet_client import get_state, set_state, delete_state, get_state_json, set_state_json, append_product_row, get_all_rows
-from auto_approval import arricchisci_dati, valida_offerta, asin_recenti_dal_foglio
+from auto_approval import arricchisci_dati, valida_offerta, prodotti_recenti_dal_foglio
 
 API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
@@ -182,7 +182,6 @@ def _pending_key(chat_id):
 # ================= MENU CON PULSANTI =================
 
 def handle_start(chat_id):
-    """Mostra il menu principale con i due pulsanti."""
     keyboard = {
         "inline_keyboard": [[
             {"text": "➕ Aggiungi offerta", "callback_data": "menu_aggiungi"},
@@ -197,7 +196,6 @@ def _ora_italiana(dt_utc):
 
 
 def show_recap(chat_id):
-    """Riepilogo pulito della coda di pubblicazione."""
     try:
         righe, _ = get_all_rows()
         now = datetime.now(timezone.utc)
@@ -281,13 +279,11 @@ def show_recap(chat_id):
 
 
 def handle_menu_aggiungi(chat_id):
-    """Quando l'utente clicca '➕ Aggiungi offerta', chiede il link."""
     set_state_json(_pending_key(chat_id), {"waiting_for_link": True})
     send_message(chat_id, "🔗 Mandami il link Amazon dell'offerta:")
 
 
 def handle_pending_link(chat_id, text):
-    """Gestisce il link mandato dopo aver cliccato 'Aggiungi offerta'."""
     state = get_state_json(_pending_key(chat_id))
     if state.get("waiting_for_link"):
         delete_state(_pending_key(chat_id))
@@ -398,7 +394,7 @@ def handle_aggiungi(chat_id, args):
             }
             dati = arricchisci_dati(dati)
             righe, _ = get_all_rows()
-            ok, motivi = valida_offerta(dati, asin_recenti_dal_foglio(righe))
+            ok, motivi = valida_offerta(dati, prodotti_recenti_dal_foglio(righe))
             if ok:
                 now = datetime.now(timezone.utc)
                 append_product_row({
