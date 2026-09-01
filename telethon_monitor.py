@@ -213,7 +213,8 @@ def process_channel(client, channel_username, righe):
                         if not dati.get("link_originale"):
                             dati["link_originale"] = product_link
                         dati = arricchisci_dati_da_html(dati, html_page)
-                        ok, motivi = valida_offerta(dati, asin_recenti_dal_foglio(righe))
+                        righe_recenti = prodotti_recenti_dal_foglio(righe)
+                        ok, motivi = valida_offerta(dati, righe_recenti)
                         if ok:
                             now_auto = datetime.now(timezone.utc)
                             append_product_row({
