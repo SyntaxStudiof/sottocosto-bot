@@ -12,7 +12,7 @@ from utils import clean_title, split_multiple_offers
 from sheet_client import get_state, set_state, get_all_rows, append_product_row
 from config import AUTO_APPROVAL_ENABLED
 from ai_offer_parser import parse_offerta_da_testo
-from auto_approval import arricchisci_dati_da_html, valida_offerta, asin_recenti_dal_foglio
+from auto_approval import arricchisci_dati_da_html, valida_offerta, prodotti_recenti_dal_foglio
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
@@ -157,36 +157,31 @@ def process_channel(client, channel_username, righe):
                 prezzo_scontato = None
                 prezzo_originale = None
 
-                # Prova prima con i pattern specifici
                 if prezzi_scontati:
                     prezzo_scontato = prezzi_scontati[0]
 
                 if prezzi_originali:
                     prezzo_originale = prezzi_originali[0]
 
-                # Se mancano, prova con il fallback generale (tutti i prezzi nel testo)
                 if prezzo_scontato is None or prezzo_originale is None:
                     all_prices = PRICE_RE.findall(single_offer_text)
                     if all_prices:
                         float_prices = sorted([float(p.replace(',', '.')) for p in all_prices])
-                        # Prendi il più piccolo come scontato, il più grande come pieno
                         if prezzo_scontato is None and len(float_prices) >= 1:
                             prezzo_scontato = str(float_prices[0]).replace('.', ',')
                         if prezzo_originale is None and len(float_prices) > 1:
                             prezzo_originale = str(float_prices[-1]).replace('.', ',')
 
-                # Sanity check: se prezzo_scontato >= prezzo_originale, scambia (canale sorgente ha invertito)
+                # Sanity check: se i prezzi sono invertiti, scambiali
                 if prezzo_scontato and prezzo_originale:
                     try:
                         p_s = float(prezzo_scontato.replace(",", "."))
                         p_o = float(prezzo_originale.replace(",", "."))
                         if p_s >= p_o:
-                            # Scambia i prezzi
                             prezzo_scontato, prezzo_originale = prezzo_originale, prezzo_scontato
                     except ValueError:
                         pass
 
-                # Ultimo tentativo: scraping della pagina Amazon (se ancora mancano i prezzi)
                 if prezzo_scontato is None:
                     try:
                         scraped_price = extract_price(html_page)
@@ -213,8 +208,7 @@ def process_channel(client, channel_username, righe):
                         if not dati.get("link_originale"):
                             dati["link_originale"] = product_link
                         dati = arricchisci_dati_da_html(dati, html_page)
-                        righe_recenti = prodotti_recenti_dal_foglio(righe)
-                        ok, motivi = valida_offerta(dati, righe_recenti)
+                        ok, motivi = valida_offerta(dati, prodotti_recenti_dal_foglio(righe))
                         if ok:
                             now_auto = datetime.now(timezone.utc)
                             append_product_row({
