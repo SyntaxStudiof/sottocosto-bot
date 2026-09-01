@@ -194,7 +194,7 @@ async def _call_groq(testo: str) -> str:
                 },
             ],
             temperature=0.1,
-            max_completion_tokens=800,
+            max_completion_tokens=2000,
             response_format={"type": "json_object"},
         )
 
