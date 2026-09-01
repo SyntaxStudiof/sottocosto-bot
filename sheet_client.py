@@ -11,14 +11,20 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
 CREDS_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
-# --- CACHE DELL'INTESTAZIONE E DEL CLIENT (per evitare errori 429) ---
+# --- CACHE ---
 _HEADER_CACHE = None
 _CLIENT_CACHE = None
 
-# --- CACHE PER LEGGI CONFIG (riduce le chiamate a Sheets) ---
+# Cache Config (TTL 10 minuti)
 _CONFIG_CACHE = {}
 _CONFIG_CACHE_TIME = {}
-_CONFIG_CACHE_TTL = 300  # 5 minuti
+_CONFIG_CACHE_TTL = 600
+
+# Cache righe principali (TTL 10 minuti)
+_ROWS_CACHE = None
+_ROWS_CACHE_TIME = 0
+_ROWS_CACHE_TTL = 600
+
 
 def _get_client():
     global _CLIENT_CACHE
@@ -28,10 +34,8 @@ def _get_client():
         _CLIENT_CACHE = gspread.authorize(creds)
     return _CLIENT_CACHE
 
+
 def _with_retry(fn, *args, retries=4, **kwargs):
-    """Ritenta le chiamate all'API di Google in caso di 429 (quota superata),
-    con backoff esponenziale. Rilancia l'errore se non è un problema di quota
-    o se i tentativi sono esauriti."""
     last_err = None
     for attempt in range(retries):
         try:
@@ -45,31 +49,48 @@ def _with_retry(fn, *args, retries=4, **kwargs):
             raise
     raise last_err
 
+
 def _get_worksheet():
     client = _get_client()
     spreadsheet = _with_retry(client.open_by_key, SHEET_ID)
     return spreadsheet.worksheet("Foglio1")
 
+
 def _get_header():
-    """Legge l'intestazione una volta sola e la mette in cache."""
     global _HEADER_CACHE
     if _HEADER_CACHE is None:
         ws = _get_worksheet()
         _HEADER_CACHE = _with_retry(ws.row_values, 1)
     return _HEADER_CACHE
 
+
 def get_all_rows():
-    """Ritorna lista di dict, ognuno con anche il numero di riga reale nel foglio."""
+    """Ritorna lista di dict, con cache di 10 minuti per ridurre chiamate API."""
+    global _ROWS_CACHE, _ROWS_CACHE_TIME
+    now = time.time()
+    if _ROWS_CACHE is not None and (now - _ROWS_CACHE_TIME) < _ROWS_CACHE_TTL:
+        return _ROWS_CACHE, None
+    
     ws = _get_worksheet()
     records = _with_retry(ws.get_all_records, numericise_ignore=['all'])
     rows = []
-    for i, r in enumerate(records, start=2):  # riga 1 = header
+    for i, r in enumerate(records, start=2):
         r["_row_number"] = i
         rows.append(r)
+    
+    _ROWS_CACHE = rows
+    _ROWS_CACHE_TIME = now
     return rows, ws
 
+
+def _invalidate_rows_cache():
+    """Invalida la cache delle righe (da chiamare dopo scritture)."""
+    global _ROWS_CACHE, _ROWS_CACHE_TIME
+    _ROWS_CACHE = None
+    _ROWS_CACHE_TIME = 0
+
+
 def mark_row(ws, row_number, stato, extra_updates=None):
-    """Aggiorna la colonna stato (e opzionalmente altre) per una riga."""
     header = _with_retry(ws.row_values, 1)
     updates = {"stato": stato}
     if extra_updates:
@@ -78,9 +99,12 @@ def mark_row(ws, row_number, stato, extra_updates=None):
         if col_name in header:
             col_index = header.index(col_name) + 1
             _with_retry(ws.update_cell, row_number, col_index, value)
+    _invalidate_rows_cache()
+
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
 
 def _get_config_worksheet():
     client = _get_client()
@@ -91,6 +115,7 @@ def _get_config_worksheet():
         ws = sheet.add_worksheet(title="Config", rows=10, cols=2)
         ws.update([["chiave", "valore"]], "A1")
         return ws
+
 
 def get_state(key, default=""):
     """Legge una chiave dal foglio Config con cache in memoria."""
@@ -113,6 +138,7 @@ def get_state(key, default=""):
     _CONFIG_CACHE_TIME[key] = now
     return default
 
+
 def set_state(key, value):
     ws = _get_config_worksheet()
     value_str = str(value)
@@ -122,25 +148,23 @@ def set_state(key, value):
     else:
         _with_retry(ws.append_row, [key, value_str], value_input_option='RAW')
     
-    # Aggiorna la cache
     _CONFIG_CACHE[key] = value_str
     _CONFIG_CACHE_TIME[key] = time.time()
 
+
 def delete_state(key):
-    """Cancella davvero la riga della chiave, invece di lasciarla con valore vuoto."""
     ws = _get_config_worksheet()
     cell = _with_retry(ws.find, key)
     if cell:
         _with_retry(ws.delete_rows, cell.row)
     
-    # Rimuovi dalla cache
     if key in _CONFIG_CACHE:
         del _CONFIG_CACHE[key]
     if key in _CONFIG_CACHE_TIME:
         del _CONFIG_CACHE_TIME[key]
 
+
 def get_state_json(key, default=None):
-    """Legge una chiave e la interpreta come JSON. Ritorna {} (o default) se assente/non valida."""
     raw = get_state(key, "")
     if not raw:
         return default if default is not None else {}
@@ -149,13 +173,15 @@ def get_state_json(key, default=None):
     except (ValueError, TypeError):
         return default if default is not None else {}
 
+
 def set_state_json(key, data):
-    """Scrive un dict come singola cella JSON, invece di una riga per campo."""
     set_state(key, json.dumps(data, ensure_ascii=False))
 
+
 def append_product_row(product_dict):
-    """Aggiunge una nuova riga prodotto in coda, rispettando l'ordine delle colonne del foglio principale."""
+    """Aggiunge una nuova riga prodotto in coda e invalida la cache."""
     ws = _get_worksheet()
-    header = _get_header()  # <--- Usa l'header in cache, evitando il 429!
+    header = _get_header()
     row = [product_dict.get(col, "") for col in header]
     _with_retry(ws.append_row, row)
+    _invalidate_rows_cache()
