@@ -3,6 +3,7 @@
 Non chiama Gemini: lavora sui dati estratti da ai_offer_parser e applica
 link affiliato, arricchimento mirato e regole di approvazione automatica.
 REGOLA IMMAGINI: si accettano SOLO immagini dai CDN Amazon.
+ANTI-DUPLICATI: controllo globale su ASIN o link negli ultimi 7 giorni.
 """
 
 import asyncio
@@ -21,7 +22,7 @@ log = logging.getLogger("auto_approval")
 AFFILIATE_TAG = getattr(config, "AFFILIATE_TAG", "sottocostoclu-21")
 MIN_DISCOUNT = getattr(config, "MIN_DISCOUNT_PERCENT", 20)
 AUTO_APPROVAL_ENABLED = getattr(config, "AUTO_APPROVAL_ENABLED", True)
-DEDUP_ORE = getattr(config, "DEDUP_ORE", 48)
+DEDUP_ORE = getattr(config, "DEDUP_ORE", 168)  # 7 giorni = 168 ore
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -210,36 +211,62 @@ def arricchisci_dati_da_html(dati: Dict[str, Any], html: str) -> Dict[str, Any]:
     return res
 
 
-def asin_recenti_dal_foglio(righe: List[Dict[str, Any]], ore: int = DEDUP_ORE) -> Set[str]:
-    out: Set[str] = set()
+def prodotti_recenti_dal_foglio(righe: List[Dict[str, Any]], ore: int = DEDUP_ORE) -> Tuple[Set[str], Set[str]]:
+    """Ritorna (set_asin, set_link_affiliato) per prodotti negli ultimi `ore` ore.
+    
+    Include TUTTI gli stati (NUOVO, APPROVATO, PUBBLICATO, SCADUTO) per evitare duplicati.
+    """
+    asin_set: Set[str] = set()
+    link_set: Set[str] = set()
     soglia = datetime.now(timezone.utc) - timedelta(hours=ore)
-    stati = {"NUOVO", "APPROVATO", "PUBBLICATO"}
+    
     for r in righe:
-        stato = (r.get("stato") or "").strip().upper()
-        if stato not in stati:
-            continue
-        asin = (r.get("ASIN") or "").strip().upper()
-        if not asin:
-            continue
+        # Controlla timestamp
         try:
             dt = datetime.fromisoformat((r.get("aggiunto_il") or "").replace("Z", "+00:00"))
+            if dt < soglia:
+                continue
         except Exception:
-            dt = None
-        if dt is None or dt >= soglia:
-            out.add(asin)
-    return out
+            continue
+        
+        # Aggiungi ASIN al set
+        asin = (r.get("ASIN") or "").strip().upper()
+        if asin:
+            asin_set.add(asin)
+        
+        # Aggiungi link affiliato normalizzato al set
+        link = (r.get("link_affiliato") or "").strip()
+        if link:
+            # Estrai ASIN dal link per normalizzare
+            link_asin = extract_asin(link)
+            if link_asin:
+                asin_set.add(link_asin.upper())
+            else:
+                link_set.add(link)
+    
+    return asin_set, link_set
 
 
-def valida_offerta(dati: Dict[str, Any], asin_recenti: Set[str]) -> Tuple[bool, List[str]]:
+def valida_offerta(dati: Dict[str, Any], righe_recenti: Tuple[Set[str], Set[str]]) -> Tuple[bool, List[str]]:
+    """Regole d'oro per l'approvazione automatica. Restituisce (ok, motivi)."""
     motivi: List[str] = []
+    asin_set, link_set = righe_recenti
+    
     if not AUTO_APPROVAL_ENABLED:
         motivi.append("auto-approvazione disabilitata")
     if len((dati.get("titolo") or "").strip()) < 6:
         motivi.append("titolo mancante o troppo corto")
-    if not dati.get("asin"):
-        motivi.append("ASIN mancante")
-    elif dati["asin"] in asin_recenti:
-        motivi.append("duplicato nelle ultime %d ore" % DEDUP_ORE)
+    
+    # Controllo duplicati: ASIN o link già presente
+    asin = (dati.get("asin") or "").upper()
+    if asin and asin in asin_set:
+        motivi.append(f"duplicato (ASIN {asin} già presente negli ultimi {DEDUP_ORE}h)")
+    elif not asin:
+        # Se manca ASIN, controlla il link affiliato
+        link = (dati.get("link_affiliato") or "").strip()
+        if link and link in link_set:
+            motivi.append("duplicato (link già presente)")
+    
     if not dati.get("link_affiliato"):
         motivi.append("link affiliato non costruibile")
     ps, pp = dati.get("prezzo_scontato"), dati.get("prezzo_pieno")
@@ -264,5 +291,6 @@ async def processa_testo_offerta(
 
     dati = await parse_offerta_da_testo(testo)
     dati = await asyncio.to_thread(arricchisci_dati, dati)
-    ok, motivi = valida_offerta(dati, asin_recenti_dal_foglio(righe_foglio))
+    righe_recenti = prodotti_recenti_dal_foglio(righe_foglio)
+    ok, motivi = valida_offerta(dati, righe_recenti)
     return {"auto_approvata": ok, "motivi": motivi, "dati": dati, "fonte": fonte}
